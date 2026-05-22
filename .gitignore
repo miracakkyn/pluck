@@ -26,3 +26,7 @@ downloads/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Araç durum dosyaları (projeye ait değil)
+.maestro/
+.claude/
