@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8" />
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <header class="pop-header">
+    <span class="mark" aria-hidden="true"></span>
+    <h1>Video İndirici</h1>
+    <button id="rescan-btn" class="icon-btn" title="Sayfayı yeniden tara" hidden>↻</button>
+  </header>
+
+  <!-- motor aranıyor -->
+  <section id="loading" class="state">
+    <p class="state-desc">Yerel motor aranıyor…</p>
+  </section>
+
+  <!-- motor kapalı -->
+  <section id="helper-down" class="state" hidden>
+    <p class="state-title">Yerel motor çalışmıyor</p>
+    <p class="state-desc">
+      İndirme motorunu başlatmak için proje klasöründeki
+      <code>start.bat</code> (Windows) veya <code>start.command</code> (macOS)
+      dosyasını çalıştır, sonra tekrar dene.
+    </p>
+    <button id="retry-btn" class="btn btn-primary btn-block">Tekrar dene</button>
+  </section>
+
+  <!-- ana içerik -->
+  <main id="content" hidden>
+    <div class="video-box">
+      <p id="video-title" class="video-title">—</p>
+      <p id="video-sub" class="video-sub mono"></p>
+    </div>
+
+    <p class="error" id="error" role="alert" hidden></p>
+
+    <div id="controls" hidden>
+      <span class="lbl">Kalite</span>
+      <div class="preset-row" id="preset-row" role="group" aria-label="Kalite"></div>
+
+      <details class="fmt-detail">
+        <summary>Tüm formatlar</summary>
+        <div class="fmt-list" id="fmt-list"></div>
+      </details>
+
+      <div class="opt">
+        <label class="lbl" for="dir">İndirme klasörü</label>
+        <input type="text" id="dir" class="input" list="dirs" />
+        <datalist id="dirs"></datalist>
+      </div>
+
+      <div class="opt">
+        <label class="lbl" for="browser">Çerez (login'li siteler)</label>
+        <select id="browser" class="input">
+          <option value="">Çerez yok</option>
+        </select>
+      </div>
+
+      <button id="download-btn" class="btn btn-primary btn-block">İndir</button>
+      <span class="flash" id="flash" role="status" hidden>Kuyruğa eklendi ✓</span>
+    </div>
+
+    <div class="queue-box">
+      <p class="queue-head">İndirme kuyruğu</p>
+      <p id="queue-empty" class="queue-empty">Henüz indirme yok.</p>
+      <ul id="queue" class="queue" aria-live="polite"></ul>
+    </div>
+  </main>
+
+  <script src="popup.js"></script>
+</body>
+</html>

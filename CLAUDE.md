@@ -25,8 +25,10 @@ kurulum/başlatma komutları olmalı; bunlar README'de ayrı belgelenir.
 - Backend: **FastAPI + uvicorn**, yalnızca `127.0.0.1`'e bağlanır.
 - Motor: **yt-dlp gömülü Python kütüphanesi** (venv içine pip ile kurulur).
 - Birleştirme/dönüştürme: **ffmpeg** (sistemde kurulu, PATH'ten).
-- Frontend: tek sayfa **vanilla JS** (framework yok).
-- Canlı ilerleme: SSE (`text/event-stream`).
+- Frontend: tek sayfa **vanilla JS** (framework yok) — `web/`.
+- Chrome eklentisi (Manifest V3) — `extension/`; popup yerel motora HTTP ile
+  bağlanır (hibrit mimari, bkz. DESIGN.md §16).
+- Canlı ilerleme: web arayüzünde SSE, eklentide `/api/jobs` yoklaması.
 
 ## Komutlar
 
@@ -50,10 +52,12 @@ kurulum/başlatma komutları olmalı; bunlar README'de ayrı belgelenir.
 - [x] Sprint 2 — İndirme kuyruğu + SSE canlı ilerleme
 - [x] Sprint 3 — Frontend (tek sayfa web arayüzü, koyu tema)
 - [x] Sprint 4 — Cookie desteği + çapraz platform başlatma scriptleri + README
+- [x] Sprint 6 — Chrome eklentisi (hibrit mimari, MV3)
 - [ ] Sprint 5 — Login'li video testi (kullanıcının üniversite URL'si)
 
-Test: 70 test, %96 kapsam. Çalıştır: `.venv\Scripts\python.exe -m pytest`
+Test: 73 test, %96 kapsam. Çalıştır: `.venv\Scripts\python.exe -m pytest`
 Uygulamayı çalıştır: `.venv\Scripts\python.exe run.py` (veya start.bat / start.command)
+Eklenti: `chrome://extensions` → Geliştirici modu → Paketlenmemiş yükle → `extension/`
 
 ## v1 kapsamı (yalnızca bunlar)
 

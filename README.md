@@ -1,9 +1,19 @@
 # Video İndirici
 
-yt-dlp + ffmpeg motoru üzerine kurulu, basit yerel web arayüzü olan genel
-amaçlı bir video indirme aracı. Akış: **bağlantı yapıştır → kalite seç → indir.**
-
+yt-dlp + ffmpeg motoru üzerine kurulu genel amaçlı bir video indirme aracı.
 Site-özel kod içermez; yt-dlp'nin desteklediği her sitede çalışır.
+
+İki kullanım yolu vardır — ikisi de aynı yerel motoru kullanır:
+
+- **Chrome eklentisi** (önerilen): Tarayıcıda sağ üstteki ikona tıkla →
+  bulunduğun sayfadaki video bulunur → kalite seç → indir.
+- **Yerel web arayüzü** (yedek): `http://127.0.0.1:8765` adresinde açılan
+  tek sayfa — bağlantıyı elle yapıştır.
+
+> **Neden "motor" gerekiyor?** Bir tarayıcı eklentisi tek başına yt-dlp/ffmpeg
+> çalıştıramaz (tarayıcı kısıtı). Bu yüzden ağır işi yerel bir yardımcı
+> program (motor) yapar; eklenti yalnızca onun ön yüzüdür. Eklentiyi
+> kullanmak için motorun arka planda çalışıyor olması gerekir.
 
 ## Özellikler
 
@@ -78,7 +88,35 @@ boş port seçilir).
 
 ---
 
-## Kullanım
+## Chrome eklentisi (önerilen kullanım)
+
+Eklenti, bulunduğun sayfadaki videoyu yerel motora taratıp indirir.
+
+### Kurulum (bir kez)
+
+1. Yukarıdaki adımlarla yerel motoru en az bir kez çalıştır (bağımlılıklar
+   kurulsun).
+2. Chrome / Edge'de `chrome://extensions` adresini aç.
+3. Sağ üstten **Geliştirici modu**'nu aç.
+4. **Paketlenmemiş öğe yükle**'ye tıkla ve proje içindeki `extension/`
+   klasörünü seç.
+5. Eklenti araç çubuğuna eklenir (görünmüyorsa puzzle ikonundan sabitle).
+
+### Kullanım
+
+1. Yerel motoru başlat (`start.bat` / `start.command`) — **arka planda açık
+   kalmalı.** Motor kapalıysa eklenti "motoru başlat" uyarısı gösterir.
+2. İndirmek istediğin videonun olduğu sayfaya git.
+3. Sağ üstteki **Video İndirici** ikonuna tıkla.
+4. Eklenti sayfayı tarar, formatları listeler. Kaliteyi seç, **İndir**'e bas.
+5. İlerleme popup'ta canlı görünür; popup'ı kapatsan da indirme motorda devam
+   eder.
+
+> macOS'ta da aynı: Chrome'a aynı `extension/` klasörü yüklenir.
+
+---
+
+## Kullanım (web arayüzü)
 
 1. Video bağlantısını kutuya yapıştırın, **Formatları getir**'e basın.
 2. Bir kalite seçin (varsayılan en yüksek) veya **Tüm formatlar**'dan belirli

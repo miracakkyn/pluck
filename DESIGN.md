@@ -262,3 +262,69 @@ script'leri (venv bootstrap komutları).
   öngörülebilirliği için bilinçli tercih.
 - İş listesi bellekte tutulur; sunucu yeniden başlarsa kuyruk sıfırlanır
   (v1 kapsamı — kalıcılık yok).
+
+## 16. Tarayıcı eklentisi (Sprint 6 — hibrit mimari)
+
+### Neden hibrit
+
+Bir Chrome eklentisi tek başına yt-dlp (Python) veya ffmpeg çalıştıramaz ve
+YouTube gibi sitelerin ayrı video+ses akışlarını birleştiremez — bu tarayıcı
+korumalı alanının kısıtıdır. Bu yüzden eklenti yalnızca **ön yüz**tür; ağır
+işi (yt-dlp + ffmpeg) zaten var olan yerel motor (FastAPI sunucusu) yapar.
+
+```
+┌────────────────────────┐   fetch http://127.0.0.1:<port>   ┌──────────────┐
+│ Chrome eklentisi (MV3) │ ────────────────────────────────► │ Yerel motor  │
+│  popup.html/js/css     │   /api/config /api/formats        │ (FastAPI +   │
+│  - aktif sekme URL'si  │   /api/jobs   /api/jobs (poll)     │  yt-dlp +    │
+│  - format + kuyruk UI  │ ◄──────────────────────────────── │  ffmpeg)     │
+└────────────────────────┘            JSON                   └──────────────┘
+```
+
+Yerel web arayüzü (web/) yedek olarak korunur; eklenti onun yerini almaz.
+
+### Eklenti dosya yapısı
+
+```
+extension/
+├── manifest.json          # Manifest V3
+├── popup.html / popup.css / popup.js
+└── icons/  icon16.png · icon48.png · icon128.png  (+ generate_icons.py)
+```
+
+### Akış
+
+1. Kullanıcı eklenti ikonuna tıklar → popup açılır.
+2. Popup motoru bulur: `127.0.0.1:8765..8770` portlarında `/api/config` denenir.
+   Bulunamazsa "motoru başlat (start.bat)" uyarısı gösterilir.
+3. Motor varsa: aktif sekmenin URL'si alınır (`activeTab` izni) ve otomatik
+   `POST /api/formats`'a gönderilir — yt-dlp o sayfadaki videoyu/formatları bulur.
+4. Kullanıcı kalite seçip "İndir"e basar → `POST /api/jobs`.
+5. Popup açık kaldığı sürece `GET /api/jobs` ~1.2 sn'de bir yoklanıp ilerleme
+   gösterilir (popup kapanınca indirme motorda devam eder).
+
+### Backend değişikliği (tek)
+
+Eklenti `chrome-extension://` kaynağından motora erişir. `CORSMiddleware`
+eklenir: `allow_origin_regex = chrome-extension://.*` — yalnızca eklenti
+kaynaklarının yanıtı okumasına izin verir; rastgele web siteleri okuyamaz.
+`/api/formats` ve `/api/jobs` zaten URL aldığı için yeni uç gerekmez.
+
+### İzinler (manifest)
+
+- `activeTab` — yalnızca tıklamada aktif sekmenin URL'sine erişim (gizlilik dostu).
+- `host_permissions: ["http://127.0.0.1/*"]` — yerel motora erişim (tüm portlar).
+
+### Güvenlik notu
+
+CORS, çapraz kaynaklı bir POST'un *gönderilmesini* engellemez; yalnızca
+yanıtın okunmasını kısıtlar. Kötü niyetli bir site teorik olarak yerel motora
+indirme tetikleyebilir (yanıtı okuyamaz, veri sızdıramaz). Tek kullanıcılı
+yerel araç için bu düşük önemde kabul edilir; ileride paylaşımlı bir jeton
+(token) ile sıkılaştırılabilir.
+
+### Kapsam dışı (v1 eklenti)
+
+- Sayfa ağ trafiğini dinleyerek gömülü/çoklu medya yakalama (`webRequest`) —
+  v1'de aktif sekme URL'si yt-dlp'ye verilir; yt-dlp videoyu kendisi bulur.
+- Eklenti mağazasına yayınlama — v1'de "paketlenmemiş yükle" ile kurulur.

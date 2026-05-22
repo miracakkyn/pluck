@@ -98,6 +98,30 @@ def test_lifespan_starts_and_stops_worker_cleanly():
         assert managed.get("/api/config").status_code == 200
 
 
+def test_cors_allows_chrome_extension_origin():
+    origin = "chrome-extension://abcdefghijklmnopabcdefghijklmnop"
+    resp = client.get("/api/config", headers={"Origin": origin})
+    assert resp.status_code == 200
+    assert resp.headers.get("access-control-allow-origin") == origin
+
+
+def test_cors_rejects_random_website_origin():
+    # Eklenti olmayan kaynaklara CORS başlığı verilmez → tarayıcı okumayı engeller.
+    resp = client.get("/api/config", headers={"Origin": "https://evil.example.com"})
+    assert resp.status_code == 200
+    assert "access-control-allow-origin" not in resp.headers
+
+
+def test_cors_preflight_for_extension_post():
+    origin = "chrome-extension://abcdefghijklmnopabcdefghijklmnop"
+    resp = client.options("/api/jobs", headers={
+        "Origin": origin,
+        "Access-Control-Request-Method": "POST",
+    })
+    assert resp.status_code == 200
+    assert resp.headers.get("access-control-allow-origin") == origin
+
+
 def test_index_serves_html():
     resp = client.get("/")
     assert resp.status_code == 200

@@ -10,6 +10,7 @@ import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -36,6 +37,15 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="Genel Amaçlı Video İndirme Aracı", lifespan=lifespan)
+
+# Chrome eklentisinin (chrome-extension://) yerel motora erişebilmesi için.
+# Yalnızca eklenti kaynakları yanıtı okuyabilir; rastgele web siteleri okuyamaz.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origin_regex=r"chrome-extension://.*",
+    allow_methods=["GET", "POST", "DELETE"],
+    allow_headers=["*"],
+)
 
 
 @app.get("/", include_in_schema=False)
