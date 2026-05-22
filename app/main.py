@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sys
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
@@ -24,6 +25,9 @@ logger = logging.getLogger("videoaraci")
 
 # Tek süreçli uygulama için modül seviyesinde tek kuyruk yöneticisi.
 queue_manager = QueueManager()
+
+# Klasör seçici durumu: pencere açık mı (pending) ve son seçilen yol (path).
+_picker_state: dict = {"pending": False, "path": None}
 
 
 @asynccontextmanager
@@ -113,6 +117,50 @@ async def get_events() -> StreamingResponse:
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache"},
     )
+
+
+async def _run_folder_picker() -> None:
+    """Klasör seçme penceresini alt-process olarak açar; sonucu state'e yazar.
+
+    tkinter ayrı bir süreçte kendi ana thread'inde çalışır (Windows + macOS
+    uyumlu). Kullanıcı iptal ederse veya tkinter yoksa `path` None kalır.
+    """
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            sys.executable, str(config.FOLDER_PICKER),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+    except OSError:
+        logger.warning("Klasör seçici başlatılamadı")
+        _picker_state["pending"] = False
+        return
+    try:
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=180)
+        chosen = stdout.decode("utf-8", errors="replace").strip()
+        if chosen:
+            _picker_state["path"] = chosen
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.wait()
+    finally:
+        _picker_state["pending"] = False
+
+
+@app.post("/api/pick-folder")
+async def post_pick_folder() -> dict:
+    """Native klasör seçme penceresini açar (arka planda çalışır)."""
+    if not _picker_state["pending"]:
+        _picker_state["pending"] = True
+        _picker_state["path"] = None
+        asyncio.create_task(_run_folder_picker())
+    return {"pending": True}
+
+
+@app.get("/api/pick-folder")
+async def get_pick_folder() -> dict:
+    """Klasör seçici durumunu döndürür: {pending, path}."""
+    return dict(_picker_state)
 
 
 # web/ varlıkları (app.js, style.css) /static altında servis edilir.

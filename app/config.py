@@ -20,6 +20,9 @@ SUPPORTED_BROWSERS = ("chrome", "edge", "firefox", "brave", "opera", "safari")
 # web/ statik dosya dizini (app/ ile aynı seviyede).
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 
+# Klasör seçme penceresini açan yardımcı script (alt-process olarak çalışır).
+FOLDER_PICKER = Path(__file__).resolve().parent / "folder_picker.py"
+
 
 def default_download_dir() -> Path:
     """Varsayılan indirme klasörü: ~/Downloads (yoksa ev dizini)."""

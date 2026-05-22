@@ -1,5 +1,5 @@
 """main.py — /api/config ve /api/formats uç testleri (motor mock'lanır)."""
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
 
@@ -132,6 +132,25 @@ def test_index_serves_html():
 def test_static_assets_served():
     assert client.get("/static/app.js").status_code == 200
     assert client.get("/static/style.css").status_code == 200
+
+
+def test_pick_folder_get_returns_state():
+    resp = client.get("/api/pick-folder")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "pending" in body
+    assert "path" in body
+
+
+def test_pick_folder_post_starts_picker():
+    # Gerçek tkinter penceresi açılmasın diye picker görevi mock'lanır.
+    from app import main as main_module
+    main_module._picker_state["pending"] = False
+    with patch("app.main._run_folder_picker", new=AsyncMock()):
+        resp = client.post("/api/pick-folder")
+    assert resp.status_code == 200
+    assert resp.json()["pending"] is True
+    main_module._picker_state["pending"] = False
 
 
 def test_events_endpoint_is_sse():

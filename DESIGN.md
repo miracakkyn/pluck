@@ -229,8 +229,9 @@ script'leri (venv bootstrap komutları).
   `outtmpl` yalnızca `paths.home` altına yazar.
 - Cookie/tarayıcı verisi loglanmaz, yanıtlarda dönmez.
 - Hata mesajları yığın izi/iç ayrıntı sızdırmaz.
-- Harici tek girdi URL'dir; yt-dlp'ye doğrudan dize olarak verilir (kabuk yok,
-  shell enjeksiyonu yüzeyi yok — alt-process değil gömülü kütüphane).
+- yt-dlp gömülü kütüphane olarak çağrılır (kabuk yok). Tek alt-process klasör
+  seçicidir: sabit komutla (`python folder_picker.py`) çalıştırılır, komut
+  satırında kullanıcı girdisi yoktur — enjeksiyon yüzeyi yoktur.
 
 ## 13. Test stratejisi (hedef ≥ %80 kapsam)
 
@@ -328,3 +329,16 @@ yerel araç için bu düşük önemde kabul edilir; ileride paylaşımlı bir je
 - Sayfa ağ trafiğini dinleyerek gömülü/çoklu medya yakalama (`webRequest`) —
   v1'de aktif sekme URL'si yt-dlp'ye verilir; yt-dlp videoyu kendisi bulur.
 - Eklenti mağazasına yayınlama — v1'de "paketlenmemiş yükle" ile kurulur.
+
+## 17. Klasör seçici (native pencere)
+
+`POST /api/pick-folder` yerel motorda bir alt-process (`app/folder_picker.py`,
+tkinter) başlatır; bu, kendi ana thread'inde native bir klasör seçme penceresi
+açar (Windows + macOS uyumlu). Sonuç modül durumuna (`_picker_state`) yazılır.
+
+- **Web arayüzü:** `POST` sonrası `GET /api/pick-folder` yoklanır; seçilen yol
+  klasör kutusuna yazılır.
+- **Eklenti:** native pencere odağı alınca Chrome popup'ı kapanır; bu yüzden
+  eklenti `POST` eder, kullanıcı klasörü seçer, eklenti yeniden açıldığında
+  `GET /api/pick-folder` ile seçilen yol doldurulur.
+- tkinter yoksa pencere açılmaz; klasör her zaman elle de yazılabilir.

@@ -132,6 +132,15 @@ async function boot() {
   setHidden("#rescan-btn", false);
 
   $("#dir").value = appConfig.default_download_dir;
+  // Daha önce "Gözat" ile bir klasör seçildiyse onu kullan.
+  try {
+    const picked = await api("GET", "/api/pick-folder");
+    if (picked && !picked.pending && picked.path) {
+      $("#dir").value = picked.path;
+    }
+  } catch {
+    /* önemsiz — varsayılan klasör kullanılır */
+  }
   for (const name of appConfig.browsers) {
     const opt = document.createElement("option");
     opt.value = name;
@@ -359,10 +368,23 @@ async function cancelJob(jobId) {
   }
 }
 
+// --- klasör seçici ------------------------------------------------------
+
+async function pickFolder() {
+  // Native pencere açılınca Chrome popup'ı odağı kaybedip kapanır; kullanıcı
+  // klasörü seçtikten sonra eklentiyi yeniden açtığında boot() onu doldurur.
+  try {
+    await api("POST", "/api/pick-folder");
+  } catch (err) {
+    showError(err.message);
+  }
+}
+
 // --- olay bağlama -------------------------------------------------------
 
 $("#retry-btn").addEventListener("click", boot);
 $("#rescan-btn").addEventListener("click", scanPage);
 $("#download-btn").addEventListener("click", startDownload);
+$("#browse-btn").addEventListener("click", pickFolder);
 
 boot();

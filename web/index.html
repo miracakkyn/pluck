@@ -63,7 +63,10 @@
 
       <div class="field">
         <label class="field-label" for="download-dir">İndirme klasörü</label>
-        <input type="text" id="download-dir" class="text-input" list="common-dirs" />
+        <div class="dir-row">
+          <input type="text" id="download-dir" class="text-input" list="common-dirs" />
+          <button type="button" id="browse-btn" class="btn btn-secondary">Gözat…</button>
+        </div>
         <datalist id="common-dirs"></datalist>
       </div>
 

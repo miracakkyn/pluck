@@ -56,8 +56,12 @@
 
       <div class="opt">
         <label class="lbl" for="dir">İndirme klasörü</label>
-        <input type="text" id="dir" class="input" list="dirs" />
+        <div class="dir-row">
+          <input type="text" id="dir" class="input" list="dirs" />
+          <button type="button" id="browse-btn" class="btn btn-secondary">Gözat…</button>
+        </div>
         <datalist id="dirs"></datalist>
+        <p class="hint">Gözat ile seçtikten sonra eklentiyi tekrar aç.</p>
       </div>
 
       <button id="download-btn" class="btn btn-primary btn-block">İndir</button>

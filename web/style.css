@@ -146,6 +146,15 @@ select.text-input { cursor: pointer; }
   font-size: 13px;
 }
 .btn-ghost:hover { border-color: var(--danger); color: var(--danger); }
+.btn-secondary {
+  background: var(--surface-2);
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+.btn-secondary:hover { border-color: var(--accent); }
+
+.dir-row { display: flex; gap: 8px; }
+.dir-row .text-input { flex: 1; }
 
 /* --- video bilgisi --- */
 .video-head { display: flex; gap: 16px; margin-bottom: 18px; }

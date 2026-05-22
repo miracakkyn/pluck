@@ -143,6 +143,15 @@ select.input { cursor: pointer; }
 .btn-primary:hover { background: var(--accent-hover); }
 .btn-primary:disabled { opacity: 0.55; cursor: progress; }
 .btn-block { width: 100%; }
+.btn-secondary {
+  background: var(--surface-2);
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+.btn-secondary:hover { border-color: var(--accent); }
+
+.dir-row { display: flex; gap: 6px; }
+.dir-row .input { flex: 1; }
 
 /* --- preset'ler --- */
 .preset-row { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 11px; }

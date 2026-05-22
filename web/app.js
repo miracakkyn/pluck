@@ -116,6 +116,36 @@ function bindEvents() {
     if (e.key === "Enter") fetchFormats();
   });
   $("#add-btn").addEventListener("click", addToQueue);
+  $("#browse-btn").addEventListener("click", pickFolder);
+}
+
+// --- klasör seçici ------------------------------------------------------
+
+async function pickFolder() {
+  const btn = $("#browse-btn");
+  btn.disabled = true;
+  btn.textContent = "Pencere açık…";
+  try {
+    await api("POST", "/api/pick-folder");
+    const path = await waitForPickResult();
+    if (path) $("#download-dir").value = path;
+  } catch (err) {
+    showError($("#video-error"), `Klasör seçilemedi: ${err.message}`);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Gözat…";
+  }
+}
+
+/** Klasör seçimi tamamlanana kadar durumu yoklar; seçilen yolu döndürür. */
+async function waitForPickResult(timeoutMs = 120000) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    const state = await api("GET", "/api/pick-folder");
+    if (!state.pending) return state.path;
+  }
+  return null;
 }
 
 // --- format getirme -----------------------------------------------------

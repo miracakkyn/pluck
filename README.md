@@ -108,8 +108,11 @@ Eklenti, bulunduğun sayfadaki videoyu yerel motora taratıp indirir.
    kalmalı.** Motor kapalıysa eklenti "motoru başlat" uyarısı gösterir.
 2. İndirmek istediğin videonun olduğu sayfaya git.
 3. Sağ üstteki **Video İndirici** ikonuna tıkla.
-4. Eklenti sayfayı tarar, formatları listeler. Kaliteyi seç, **İndir**'e bas.
-5. İlerleme popup'ta canlı görünür; popup'ı kapatsan da indirme motorda devam
+4. Eklenti sayfayı tarar. Site login gerektiriyorsa **Çerez** menüsünden o
+   siteye girişli tarayıcını seç ve ↻ ile yeniden tara.
+5. Kaliteyi seç. İndirme klasörünü yazabilir ya da **Gözat…** ile native
+   pencereden seçebilirsin (Gözat'tan sonra eklentiyi tekrar aç). **İndir**'e bas.
+6. İlerleme popup'ta canlı görünür; popup'ı kapatsan da indirme motorda devam
    eder.
 
 > macOS'ta da aynı: Chrome'a aynı `extension/` klasörü yüklenir.
@@ -118,10 +121,11 @@ Eklenti, bulunduğun sayfadaki videoyu yerel motora taratıp indirir.
 
 ## Kullanım (web arayüzü)
 
-1. Video bağlantısını kutuya yapıştırın, **Formatları getir**'e basın.
+1. Video bağlantısını yapıştırın. Site login gerektiriyorsa **Çerez**
+   menüsünden o siteye girişli tarayıcınızı seçin. **Formatları getir**'e basın.
 2. Bir kalite seçin (varsayılan en yüksek) veya **Tüm formatlar**'dan belirli
    bir format seçin.
-3. İndirme klasörünü ve gerekiyorsa çerez tarayıcısını ayarlayın.
+3. İndirme klasörünü yazın ya da **Gözat…** ile native pencereden seçin.
 4. **Kuyruğa ekle**'ye basın. İndirmeler sırayla işlenir; ilerleme canlı görünür.
 
 ---
