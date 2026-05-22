@@ -1,5 +1,5 @@
 "use strict";
-/* Video İndirici — tek sayfa arayüz mantığı.
+/* Pluck — tek sayfa arayüz mantığı.
    Backend sözleşmesi: bkz. DESIGN.md §6. */
 
 // --- kısayollar & yardımcılar -------------------------------------------

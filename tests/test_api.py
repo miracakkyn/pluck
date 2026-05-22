@@ -131,7 +131,7 @@ def test_index_serves_html():
     resp = client.get("/")
     assert resp.status_code == 200
     assert resp.headers["content-type"].startswith("text/html")
-    assert "Video İndirici" in resp.text
+    assert "Pluck" in resp.text
 
 
 def test_static_assets_served():

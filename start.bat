@@ -1,5 +1,5 @@
 @echo off
-REM Video Indirici - Windows tek-tik baslatici
+REM Pluck - Windows tek-tik baslatici
 REM Sanal ortami olusturur, bagimliliklari kurar ve uygulamayi calistirir.
 cd /d "%~dp0"
 

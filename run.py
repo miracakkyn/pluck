@@ -46,7 +46,7 @@ def main() -> None:
     _enable_utf8_output()
     port = find_free_port(config.DEFAULT_PORT)
     url = f"http://{config.HOST}:{port}"
-    print(f"\n  Video Indirici calisiyor  ->  {url}")
+    print(f"\n  Pluck calisiyor  ->  {url}")
     print("  Durdurmak icin bu pencerede Ctrl+C.\n")
     # Sunucu ayağa kalkana kadar kısa gecikmeyle tarayıcıyı aç.
     threading.Timer(1.2, lambda: webbrowser.open(url)).start()

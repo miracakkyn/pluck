@@ -1,4 +1,4 @@
-# DESIGN.md — Mimari Tasarım
+# DESIGN.md — Mimari Tasarım (Pluck)
 
 > Bu belge, kod yazılmadan önce mimariyi, akışları ve sözleşmeleri tanımlar.
 > **Kullanıcı onayı olmadan uygulama kodu yazılmaz.**

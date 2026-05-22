@@ -40,7 +40,7 @@ async def lifespan(_: FastAPI):
         await queue_manager.stop()
 
 
-app = FastAPI(title="Genel Amaçlı Video İndirme Aracı", lifespan=lifespan)
+app = FastAPI(title="Pluck", lifespan=lifespan)
 
 # Chrome eklentisinin (chrome-extension://) yerel motora erişebilmesi için.
 # Yalnızca eklenti kaynakları yanıtı okuyabilir; rastgele web siteleri okuyamaz.

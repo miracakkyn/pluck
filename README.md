@@ -1,7 +1,10 @@
-# Video İndirici
+# Pluck
 
-yt-dlp + ffmpeg motoru üzerine kurulu genel amaçlı bir video indirme aracı.
-Site-özel kod içermez; yt-dlp'nin desteklediği her sitede çalışır.
+> **Sayfadan videoyu kopar al** — yt-dlp + ffmpeg motorlu, tarayıcı eklentisi
+> ve yerel web arayüzü olan genel amaçlı video indirici.
+
+Pluck site-özel kod içermez; yt-dlp'nin desteklediği her sitede çalışır
+(YouTube, üniversite portalları, vimeo, twitch vb.).
 
 İki kullanım yolu vardır — ikisi de aynı yerel motoru kullanır:
 
@@ -121,7 +124,7 @@ Eklenti Firefox 115+ ile uyumludur (MV3). Yükleme:
 1. Yerel motoru başlat (`start.bat` / `start.command`) — **arka planda açık
    kalmalı.** Motor kapalıysa eklenti "motoru başlat" uyarısı gösterir.
 2. İndirmek istediğin videonun olduğu sayfaya git.
-3. Sağ üstteki **Video İndirici** ikonuna tıkla.
+3. Sağ üstteki **Pluck** ikonuna tıkla.
 4. Eklenti sayfayı tarar. Site login gerektiriyorsa **Çerez** menüsünden o
    siteye girişli tarayıcını seç ve ↻ ile yeniden tara.
 5. Kaliteyi seç. İndirme klasörünü yazabilir ya da **Gözat…** ile native

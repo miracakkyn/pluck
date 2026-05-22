@@ -4,9 +4,9 @@
 
 ## Proje
 
-**Genel Amaçlı Video İndirme Aracı** — IDM benzeri, yt-dlp + ffmpeg motoru
-üzerine kurulu, basit yerel web arayüzü olan bir video indirme aracı.
-Akış: link yapıştır → kalite seç → indir.
+**Pluck** — IDM benzeri, yt-dlp + ffmpeg motoru üzerine kurulu genel amaçlı
+video indirici. Hibrit mimari: tarayıcı eklentisi (Chrome + Firefox) + yerel
+web arayüzü + ortak yerel motor (FastAPI). Akış: tıkla → kalite seç → indir.
 
 **Site-özel kod YAZILMAZ.** Yalnızca yt-dlp'nin genel yetenekleri kullanılır.
 

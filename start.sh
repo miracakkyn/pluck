@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Video Indirici - macOS / Linux baslatici
+# Pluck - macOS / Linux baslatici
 # Sanal ortami olusturur, bagimliliklari kurar ve uygulamayi calistirir.
 set -e
 cd "$(dirname "$0")"

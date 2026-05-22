@@ -1,5 +1,5 @@
 "use strict";
-/* Video İndirici — eklenti popup mantığı.
+/* Pluck — eklenti popup mantığı.
    Yerel motoru (FastAPI) bulur, aktif sekmenin videosunu yt-dlp'ye taratır
    ve indirme işini motora yollar. Backend sözleşmesi: bkz. DESIGN.md §6, §16. */
 
