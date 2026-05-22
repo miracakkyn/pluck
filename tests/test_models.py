@@ -36,6 +36,17 @@ class TestFormatsRequest:
         # RFC 1918 LAN medya sunucuları bilinçli olarak engellenmez.
         assert FormatsRequest(url="http://192.168.1.50/video.mp4").url
 
+    def test_browser_optional(self):
+        assert FormatsRequest(url="https://example.com/v").browser is None
+
+    def test_browser_accepted(self):
+        req = FormatsRequest(url="https://example.com/v", browser="chrome")
+        assert req.browser == "chrome"
+
+    def test_invalid_browser_rejected(self):
+        with pytest.raises(ValidationError):
+            FormatsRequest(url="https://example.com/v", browser="netscape")
+
 
 class TestJobRequest:
     def test_valid(self, tmp_path):

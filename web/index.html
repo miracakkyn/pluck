@@ -30,6 +30,14 @@
           Formatları getir
         </button>
       </div>
+      <div class="field cookie-field">
+        <label class="field-label" for="browser">
+          Çerez — login gerektiren siteler için (tarama öncesi seç)
+        </label>
+        <select id="browser" class="text-input">
+          <option value="">Çerez yok</option>
+        </select>
+      </div>
       <p class="error" id="compose-error" role="alert" hidden></p>
     </section>
 
@@ -53,18 +61,10 @@
         <div class="formats-list" id="formats-list"></div>
       </details>
 
-      <div class="options-grid">
-        <div class="field">
-          <label class="field-label" for="download-dir">İndirme klasörü</label>
-          <input type="text" id="download-dir" class="text-input" list="common-dirs" />
-          <datalist id="common-dirs"></datalist>
-        </div>
-        <div class="field">
-          <label class="field-label" for="browser">Çerez (login'li siteler)</label>
-          <select id="browser" class="text-input">
-            <option value="">Çerez yok</option>
-          </select>
-        </div>
+      <div class="field">
+        <label class="field-label" for="download-dir">İndirme klasörü</label>
+        <input type="text" id="download-dir" class="text-input" list="common-dirs" />
+        <datalist id="common-dirs"></datalist>
       </div>
 
       <div class="video-actions">

@@ -69,7 +69,9 @@ async def get_config() -> ConfigResponse:
 async def post_formats(req: FormatsRequest) -> FormatsResponse:
     """Verilen URL için mevcut format/çözünürlükleri döndürür."""
     try:
-        return await asyncio.to_thread(ytdlp_engine.list_formats, req.url)
+        return await asyncio.to_thread(
+            ytdlp_engine.list_formats, req.url, req.browser
+        )
     except EngineError as exc:
         # Kullanıcı hatası; izleme için kaydedilir (URL zaten kullanıcı girdisi).
         logger.warning("Format listeleme başarısız: %s | url=%s", exc, req.url)

@@ -17,10 +17,12 @@ def test_returned_port_is_actually_free():
 
 
 def test_skips_busy_port():
+    # İşletim sistemi boş bir port versin (8765 sabitine bağımlı kalmamak için).
     busy = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    busy.bind((config.HOST, config.DEFAULT_PORT))
+    busy.bind((config.HOST, 0))
     busy.listen(1)
+    busy_port = busy.getsockname()[1]
     try:
-        assert find_free_port(config.DEFAULT_PORT) != config.DEFAULT_PORT
+        assert find_free_port(busy_port) != busy_port
     finally:
         busy.close()

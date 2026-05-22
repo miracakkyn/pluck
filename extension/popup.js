@@ -164,7 +164,8 @@ async function scanPage() {
   $("#video-sub").textContent = pageUrl;
   setHidden("#controls", true);
   try {
-    const data = await api("POST", "/api/formats", { url: pageUrl });
+    const browser = $("#browser").value || null;
+    const data = await api("POST", "/api/formats", { url: pageUrl, browser });
     renderVideo(data);
   } catch (err) {
     $("#video-title").textContent = "Video bulunamadı";

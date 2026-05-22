@@ -52,15 +52,35 @@ def _validate_url(value: str) -> str:
     return cleaned
 
 
+def _validate_browser(value: str | None) -> str | None:
+    """Boş ise None; aksi halde bu platformda desteklenen bir tarayıcı olmalı."""
+    if value is None or not value.strip():
+        return None
+    cleaned = value.strip().lower()
+    if cleaned not in config.available_browsers():
+        raise ValueError(f"Desteklenmeyen tarayıcı: {value}")
+    return cleaned
+
+
 class FormatsRequest(BaseModel):
-    """POST /api/formats gövdesi."""
+    """POST /api/formats gövdesi.
+
+    `browser` verilirse format taraması o tarayıcının çerezleriyle yapılır —
+    login gerektiren siteler için gereklidir.
+    """
 
     url: str
+    browser: str | None = None
 
     @field_validator("url")
     @classmethod
     def _check_url(cls, value: str) -> str:
         return _validate_url(value)
+
+    @field_validator("browser")
+    @classmethod
+    def _check_browser(cls, value: str | None) -> str | None:
+        return _validate_browser(value)
 
 
 class FormatInfo(BaseModel):
@@ -133,12 +153,7 @@ class JobRequest(BaseModel):
     @field_validator("browser")
     @classmethod
     def _check_browser(cls, value: str | None) -> str | None:
-        if value is None or not value.strip():
-            return None
-        cleaned = value.strip().lower()
-        if cleaned not in config.available_browsers():
-            raise ValueError(f"Desteklenmeyen tarayıcı: {value}")
-        return cleaned
+        return _validate_browser(value)
 
 
 @dataclass

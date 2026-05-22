@@ -20,12 +20,15 @@ from app.models import FormatInfo, FormatsResponse
 PRESETS: tuple[str, ...] = ("best", "1080p", "720p", "480p", "audio")
 
 # Preset adı -> yt-dlp format seçici string'i.
-# `/b...` yedeği: ayrı akış yoksa birleşik en iyi formata düşer.
+# İlk dalda mp4 video + m4a (AAC) ses tercih edilir: bu, her oynatıcıda
+# sorunsuz ÇALIŞAN (sesli) bir .mp4 üretir — opus sesin mp4 içinde sessiz
+# görünmesini önler. Uygun mp4/m4a yoksa ikinci dalda en iyi video+ses'e
+# düşülür (yine de ses içerir).
 _PRESET_SELECTORS: dict[str, str] = {
-    "best": "bv*+ba/b",
-    "1080p": "bv*[height<=1080]+ba/b/b[height<=1080]",
-    "720p": "bv*[height<=720]+ba/b/b[height<=720]",
-    "480p": "bv*[height<=480]+ba/b/b[height<=480]",
+    "best": "bv*[ext=mp4]+ba[ext=m4a]/bv*+ba/b",
+    "1080p": "bv*[height<=1080][ext=mp4]+ba[ext=m4a]/bv*[height<=1080]+ba/b[height<=1080]",
+    "720p": "bv*[height<=720][ext=mp4]+ba[ext=m4a]/bv*[height<=720]+ba/b[height<=720]",
+    "480p": "bv*[height<=480][ext=mp4]+ba[ext=m4a]/bv*[height<=480]+ba/b[height<=480]",
     "audio": "ba/b",
 }
 
@@ -134,9 +137,15 @@ def _parse_info(info: dict) -> FormatsResponse:
     )
 
 
-def list_formats(url: str) -> FormatsResponse:
-    """Verilen URL için mevcut format/çözünürlükleri döndürür (bloklayan)."""
-    options = {"quiet": True, "no_warnings": True, "skip_download": True}
+def list_formats(url: str, browser: str | None = None) -> FormatsResponse:
+    """Verilen URL için mevcut format/çözünürlükleri döndürür (bloklayan).
+
+    `browser` verilirse o tarayıcının çerezleri kullanılır — login gerektiren
+    siteleri yt-dlp'nin görebilmesi için tarama adımında da gereklidir.
+    """
+    options: dict = {"quiet": True, "no_warnings": True, "skip_download": True}
+    if browser:
+        options["cookiesfrombrowser"] = (browser,)
     try:
         with YoutubeDL(options) as ydl:
             info = ydl.extract_info(url, download=False)
@@ -173,7 +182,10 @@ def download(
         "format": build_format_selector(selection),
         "merge_output_format": "mp4",
         "paths": {"home": str(download_dir)},
-        "outtmpl": "%(title)s [%(id)s].%(ext)s",
+        # Kalite/format seçimi dosya adına yazılır: aynı videoyu farklı
+        # kalitede indirince çakışma olmaz (yt-dlp "zaten indirilmiş" deyip
+        # atlamaz). `selection` doğrulanmış, dosya-adı-güvenli bir dizedir.
+        "outtmpl": f"%(title)s [%(id)s] {selection}.%(ext)s",
         "quiet": True,
         "no_warnings": True,
         "noprogress": True,

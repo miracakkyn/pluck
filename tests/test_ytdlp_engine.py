@@ -42,12 +42,18 @@ def _mock_ydl(info=None, error=None):
 
 
 class TestBuildFormatSelector:
-    def test_best_is_default_highest(self):
-        assert build_format_selector("best") == "bv*+ba/b"
+    def test_best_prefers_compatible_mp4(self):
+        sel = build_format_selector("best")
+        # mp4 video + m4a (AAC) ses tercih edilir → her oynatıcıda sesli çalar.
+        assert "ext=mp4" in sel
+        assert "ext=m4a" in sel
+        assert sel.endswith("/bv*+ba/b")  # yedek dal
 
     @pytest.mark.parametrize("preset,height", [("1080p", 1080), ("720p", 720), ("480p", 480)])
     def test_resolution_presets(self, preset, height):
-        assert f"height<={height}" in build_format_selector(preset)
+        sel = build_format_selector(preset)
+        assert f"height<={height}" in sel
+        assert "ext=mp4" in sel  # uyumlu mp4 tercihi
 
     def test_audio_preset(self):
         assert build_format_selector("audio") == "ba/b"
@@ -125,6 +131,18 @@ class TestListFormats:
             resp = list_formats("https://x/v")
         assert resp.thumbnail is None
 
+    def test_passes_cookies_when_browser_given(self):
+        ydl = _mock_ydl(FAKE_INFO)
+        with patch.object(ytdlp_engine, "YoutubeDL", ydl):
+            list_formats("https://x/v", browser="chrome")
+        assert ydl.call_args[0][0]["cookiesfrombrowser"] == ("chrome",)
+
+    def test_no_cookies_without_browser(self):
+        ydl = _mock_ydl(FAKE_INFO)
+        with patch.object(ytdlp_engine, "YoutubeDL", ydl):
+            list_formats("https://x/v")
+        assert "cookiesfrombrowser" not in ydl.call_args[0][0]
+
 
 class TestDownload:
     def test_builds_format_and_calls_download(self, tmp_path):
@@ -155,6 +173,15 @@ class TestDownload:
                 url="https://x/v", selection="best", download_dir=str(tmp_path),
             )
         assert "cookiesfrombrowser" not in ydl_class.call_args[0][0]
+
+    def test_outtmpl_includes_selection(self, tmp_path):
+        # Aynı videoyu farklı kalitede indirince dosya adı çakışmamalı.
+        ydl_class = _mock_ydl()
+        with patch.object(ytdlp_engine, "YoutubeDL", ydl_class):
+            ytdlp_engine.download(
+                url="https://x/v", selection="1080p", download_dir=str(tmp_path),
+            )
+        assert "1080p" in ydl_class.call_args[0][0]["outtmpl"]
 
     def test_audio_adds_extract_postprocessor(self, tmp_path):
         ydl_class = _mock_ydl()

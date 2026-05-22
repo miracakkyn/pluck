@@ -34,6 +34,15 @@
       <p id="video-sub" class="video-sub mono"></p>
     </div>
 
+    <!-- Çerez: tarama ÖNCESİ ayarlanabilmeli (login'li siteler için). -->
+    <div class="opt">
+      <label class="lbl" for="browser">Çerez (login'li siteler)</label>
+      <select id="browser" class="input">
+        <option value="">Çerez yok</option>
+      </select>
+      <p class="hint">Site login istiyorsa tarayıcını seç, sonra ↻ ile tekrar tara.</p>
+    </div>
+
     <p class="error" id="error" role="alert" hidden></p>
 
     <div id="controls" hidden>
@@ -49,13 +58,6 @@
         <label class="lbl" for="dir">İndirme klasörü</label>
         <input type="text" id="dir" class="input" list="dirs" />
         <datalist id="dirs"></datalist>
-      </div>
-
-      <div class="opt">
-        <label class="lbl" for="browser">Çerez (login'li siteler)</label>
-        <select id="browser" class="input">
-          <option value="">Çerez yok</option>
-        </select>
       </div>
 
       <button id="download-btn" class="btn btn-primary btn-block">İndir</button>

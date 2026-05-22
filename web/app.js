@@ -131,7 +131,8 @@ async function fetchFormats() {
   btn.disabled = true;
   btn.textContent = "Getiriliyor…";
   try {
-    currentVideo = await api("POST", "/api/formats", { url });
+    const browser = $("#browser").value || null;
+    currentVideo = await api("POST", "/api/formats", { url, browser });
     renderVideo(currentVideo);
   } catch (err) {
     showError($("#compose-error"), err.message);
