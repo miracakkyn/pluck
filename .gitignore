@@ -1,0 +1,28 @@
+# Python sanal ortamı
+.venv/
+venv/
+
+# Python derleme önbelleği
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# İndirilen videolar (Sprint 0 motor testi çıktıları)
+downloads/
+*.mp4
+*.mkv
+*.webm
+*.m4a
+*.mp3
+*.part
+*.ytdl
+
+# Editör / işletim sistemi
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

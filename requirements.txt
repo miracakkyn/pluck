@@ -1,0 +1,8 @@
+# Çalışma zamanı bağımlılıkları
+# Sprint 0'da doğrulanan sürümler (Python 3.13, Windows + macOS).
+fastapi==0.136.1
+uvicorn[standard]==0.47.0
+
+# yt-dlp siteler değiştikçe sık güncellenir; alt sınır pinlenir, güncellemeye açık.
+# Güncel tutmak için: pip install -U yt-dlp
+yt-dlp>=2026.3.17
