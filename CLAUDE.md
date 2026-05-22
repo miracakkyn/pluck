@@ -44,13 +44,15 @@ kurulum/başlatma komutları olmalı; bunlar README'de ayrı belgelenir.
 
 ## Sprint durumu
 
-- [ ] Sprint 0 — Kurulum + motor doğrulama (devam ediyor)
-- [ ] Sprint 0.5 — DESIGN.md (kod kapısı, kullanıcı onayı gerekir)
-- [ ] Sprint 1 — Backend çekirdek (yt-dlp engine + format listeleme)
-- [ ] Sprint 2 — İndirme kuyruğu + SSE canlı ilerleme
+- [x] Sprint 0 — Kurulum + motor doğrulama (yt-dlp 2026.03.17, ffmpeg 8.0.1, deno 2.8.0)
+- [x] Sprint 0.5 — DESIGN.md (onaylandı)
+- [x] Sprint 1 — Backend çekirdek (yt-dlp engine + format listeleme)
+- [x] Sprint 2 — İndirme kuyruğu + SSE canlı ilerleme
 - [ ] Sprint 3 — Frontend (tek sayfa web arayüzü)
 - [ ] Sprint 4 — Cookie desteği + çapraz platform başlatma scriptleri + README
 - [ ] Sprint 5 — Login'li video testi (kullanıcının üniversite URL'si)
+
+Test: 65 test, %96 kapsam. Çalıştır: `.venv\Scripts\python.exe -m pytest`
 
 ## v1 kapsamı (yalnızca bunlar)
 
