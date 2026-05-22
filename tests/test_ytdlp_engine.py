@@ -67,20 +67,20 @@ class TestBuildFormatSelector:
 class TestListFormats:
     def test_parses_metadata(self):
         with patch.object(ytdlp_engine, "YoutubeDL", _mock_ydl(FAKE_INFO)):
-            resp = list_formats("https://x/v")
+            resp = list_formats("https://x/v").video
         assert resp.title == "Test Video"
         assert resp.duration == 120.0
         assert resp.uploader == "Test Channel"
 
     def test_skips_storyboard(self):
         with patch.object(ytdlp_engine, "YoutubeDL", _mock_ydl(FAKE_INFO)):
-            resp = list_formats("https://x/v")
+            resp = list_formats("https://x/v").video
         ids = {f.format_id for f in resp.formats}
         assert ids == {"140", "137", "18"}
 
     def test_classifies_kind(self):
         with patch.object(ytdlp_engine, "YoutubeDL", _mock_ydl(FAKE_INFO)):
-            resp = list_formats("https://x/v")
+            resp = list_formats("https://x/v").video
         kinds = {f.format_id: f.kind for f in resp.formats}
         assert kinds["140"] == "audio"
         assert kinds["137"] == "video"
@@ -88,7 +88,7 @@ class TestListFormats:
 
     def test_includes_presets(self):
         with patch.object(ytdlp_engine, "YoutubeDL", _mock_ydl(FAKE_INFO)):
-            resp = list_formats("https://x/v")
+            resp = list_formats("https://x/v").video
         assert "best" in resp.presets
 
     def test_download_error_cleaned(self):
@@ -118,7 +118,7 @@ class TestListFormats:
              "acodec": "none", "height": 720},  # width yok, resolution yok
         ]}
         with patch.object(ytdlp_engine, "YoutubeDL", _mock_ydl(info)):
-            resp = list_formats("https://x/v")
+            resp = list_formats("https://x/v").video
         assert resp.formats[0].resolution == "720p"
         assert "None" not in resp.formats[0].resolution
 
@@ -128,7 +128,7 @@ class TestListFormats:
              "acodec": "mp4a", "height": 360, "resolution": "640x360"},
         ]}
         with patch.object(ytdlp_engine, "YoutubeDL", _mock_ydl(info)):
-            resp = list_formats("https://x/v")
+            resp = list_formats("https://x/v").video
         assert resp.thumbnail is None
 
     def test_passes_cookies_when_browser_given(self):
@@ -142,6 +142,31 @@ class TestListFormats:
         with patch.object(ytdlp_engine, "YoutubeDL", ydl):
             list_formats("https://x/v")
         assert "cookiesfrombrowser" not in ydl.call_args[0][0]
+
+    def test_playlist_returns_all_entries(self):
+        # Çoklu video sayfası: yt-dlp playlist döndürür; tüm girdiler dönmeli.
+        playlist_info = {
+            "_type": "playlist",
+            "title": "Test Playlist",
+            "entries": [
+                {**FAKE_INFO, "webpage_url": "https://x/v1", "title": "Entry 1"},
+                {**FAKE_INFO, "webpage_url": "https://x/v2", "title": "Entry 2"},
+            ],
+        }
+        with patch.object(ytdlp_engine, "YoutubeDL", _mock_ydl(playlist_info)):
+            scan = list_formats("https://x/playlist")
+        assert scan.type == "playlist"
+        assert scan.playlist_title == "Test Playlist"
+        assert len(scan.entries) == 2
+        assert scan.entries[0].title == "Entry 1"
+        assert scan.entries[0].url == "https://x/v1"
+        assert scan.entries[1].url == "https://x/v2"
+
+    def test_empty_playlist_raises(self):
+        empty = {"_type": "playlist", "title": "T", "entries": [None, None]}
+        with patch.object(ytdlp_engine, "YoutubeDL", _mock_ydl(empty)):
+            with pytest.raises(EngineError):
+                list_formats("https://x/empty")
 
 
 class TestDownload:

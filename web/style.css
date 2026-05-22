@@ -156,6 +156,29 @@ select.text-input { cursor: pointer; }
 .dir-row { display: flex; gap: 8px; }
 .dir-row .text-input { flex: 1; }
 
+/* --- çoklu video girdi listesi --- */
+.playlist-hint { color: var(--text-dim); font-size: 13px; margin-bottom: 12px; }
+.entries { list-style: none; padding: 0; display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; max-height: 320px; overflow-y: auto; }
+.entry {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+}
+.entry-title {
+  flex: 1; min-width: 0;
+  font-size: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.entry-dur { font-size: 12px; color: var(--text-dim); flex-shrink: 0; }
+.btn-sm { padding: 6px 12px; font-size: 13px; }
+.btn-sm.added { background: var(--surface); color: var(--text-dim); border: 1px solid var(--border-strong); }
+
 /* --- video bilgisi --- */
 .video-head { display: flex; gap: 16px; margin-bottom: 18px; }
 .video-thumb {

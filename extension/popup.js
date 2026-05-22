@@ -22,6 +22,7 @@ let appConfig = null;
 let pageUrl = null;
 let selection = "best";
 let pollTimer = null;
+let currentScan = null;  // son tarama yanıtı (tek video veya playlist)
 
 const $ = (sel) => document.querySelector(sel);
 const setHidden = (sel, hidden) => { $(sel).hidden = hidden; };
@@ -160,22 +161,32 @@ async function boot() {
 
 // --- sayfa tarama -------------------------------------------------------
 
+function hideAllModes() {
+  setHidden("#shared-controls", true);
+  setHidden("#single-controls", true);
+  setHidden("#playlist-controls", true);
+}
+
 async function scanPage() {
   clearError();
+  hideAllModes();
   if (!pageUrl || !/^https?:/i.test(pageUrl)) {
     $("#video-title").textContent = "Bu sekmede video yok";
     $("#video-sub").textContent = "";
     showError("Bir web sayfasında açıkken eklentiyi kullanın.");
-    setHidden("#controls", true);
     return;
   }
   $("#video-title").textContent = "Sayfa taranıyor…";
   $("#video-sub").textContent = pageUrl;
-  setHidden("#controls", true);
   try {
     const browser = $("#browser").value || null;
-    const data = await api("POST", "/api/formats", { url: pageUrl, browser });
-    renderVideo(data);
+    const scan = await api("POST", "/api/formats", { url: pageUrl, browser });
+    currentScan = scan;
+    if (scan.type === "playlist") {
+      renderPlaylist(scan);
+    } else {
+      renderVideo(scan.video);
+    }
   } catch (err) {
     $("#video-title").textContent = "Video bulunamadı";
     $("#video-sub").textContent = "";
@@ -186,12 +197,96 @@ async function scanPage() {
 function renderVideo(video) {
   $("#video-title").textContent = video.title;
   $("#video-sub").textContent = [video.uploader, humanDuration(video.duration)]
-    .filter(Boolean)
-    .join(" · ");
+    .filter(Boolean).join(" · ");
   selection = "best";
   renderPresets(video.presets);
   renderFormats(video.formats);
-  setHidden("#controls", false);
+  setHidden("#shared-controls", false);
+  setHidden("#single-controls", false);
+  setHidden("#playlist-controls", true);
+}
+
+function renderPlaylist(scan) {
+  const count = scan.entries.length;
+  $("#video-title").textContent = `${count} video bulundu`;
+  $("#video-sub").textContent = scan.playlist_title || "";
+  selection = "best";
+  // Tüm girdiler aynı preset listesini kullanır; ilk girdiden alıyoruz.
+  const presets = scan.entries[0]?.presets || ["best", "1080p", "720p", "480p", "audio"];
+  renderPresets(presets);
+
+  const list = $("#playlist-entries");
+  list.replaceChildren();
+  scan.entries.forEach((entry, i) => {
+    const li = document.createElement("li");
+    li.className = "entry";
+    const title = document.createElement("span");
+    title.className = "entry-title";
+    title.textContent = entry.title || `Video ${i + 1}`;
+    const dur = document.createElement("span");
+    dur.className = "entry-dur mono";
+    dur.textContent = humanDuration(entry.duration);
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "btn btn-primary btn-sm";
+    btn.textContent = "İndir";
+    btn.addEventListener("click", () => queueEntry(entry, btn));
+    li.append(title, dur, btn);
+    list.appendChild(li);
+  });
+
+  setHidden("#shared-controls", false);
+  setHidden("#single-controls", true);
+  setHidden("#playlist-controls", false);
+}
+
+async function queueEntry(entry, btn) {
+  if (btn) { btn.disabled = true; btn.textContent = "…"; }
+  try {
+    await api("POST", "/api/jobs", {
+      url: entry.url,
+      selection,
+      download_dir: $("#dir").value.trim(),
+      browser: $("#browser").value || null,
+    });
+    if (btn) {
+      btn.textContent = "Eklendi ✓";
+      btn.classList.add("added");
+    }
+  } catch (err) {
+    showError(err.message);
+    if (btn) { btn.disabled = false; btn.textContent = "İndir"; }
+  }
+}
+
+async function downloadAllEntries() {
+  if (!currentScan || currentScan.type !== "playlist") return;
+  const btn = $("#download-all-btn");
+  btn.disabled = true;
+  btn.textContent = "Ekleniyor…";
+  try {
+    for (const entry of currentScan.entries) {
+      await api("POST", "/api/jobs", {
+        url: entry.url,
+        selection,
+        download_dir: $("#dir").value.trim(),
+        browser: $("#browser").value || null,
+      });
+    }
+    for (const b of document.querySelectorAll("#playlist-entries .btn")) {
+      b.textContent = "Eklendi ✓";
+      b.classList.add("added");
+      b.disabled = true;
+    }
+    const flash = $("#playlist-flash");
+    flash.hidden = false;
+    setTimeout(() => { flash.hidden = true; }, 2500);
+  } catch (err) {
+    showError(err.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Tümünü indir";
+  }
 }
 
 function renderPresets(presets) {
@@ -385,6 +480,7 @@ async function pickFolder() {
 $("#retry-btn").addEventListener("click", boot);
 $("#rescan-btn").addEventListener("click", scanPage);
 $("#download-btn").addEventListener("click", startDownload);
+$("#download-all-btn").addEventListener("click", downloadAllEntries);
 $("#browse-btn").addEventListener("click", pickFolder);
 
 boot();

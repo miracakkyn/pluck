@@ -92,7 +92,7 @@ boş port seçilir).
 
 Eklenti, bulunduğun sayfadaki videoyu yerel motora taratıp indirir.
 
-### Kurulum (bir kez)
+### Kurulum (Chrome / Edge)
 
 1. Yukarıdaki adımlarla yerel motoru en az bir kez çalıştır (bağımlılıklar
    kurulsun).
@@ -101,6 +101,20 @@ Eklenti, bulunduğun sayfadaki videoyu yerel motora taratıp indirir.
 4. **Paketlenmemiş öğe yükle**'ye tıkla ve proje içindeki `extension/`
    klasörünü seç.
 5. Eklenti araç çubuğuna eklenir (görünmüyorsa puzzle ikonundan sabitle).
+
+### Kurulum (Firefox)
+
+Eklenti Firefox 115+ ile uyumludur (MV3). Yükleme:
+
+1. Firefox adres çubuğuna `about:debugging` yaz.
+2. Sol menüden **Bu Firefox**'a geç.
+3. **Geçici Eklenti Yükle** → proje içindeki `extension/manifest.json`
+   dosyasını seç.
+4. Eklenti araç çubuğuna eklenir.
+
+> Geçici eklenti Firefox kapanınca silinir; her açılışta tekrar yüklenir.
+> Kalıcı kurulum için eklentinin Mozilla tarafından imzalanması gerekir
+> (ücretsiz, AMO üzerinden) — v1 için geçici yükleme yeterli.
 
 ### Kullanım
 

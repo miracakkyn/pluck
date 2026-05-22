@@ -56,11 +56,6 @@
         <div class="preset-row" id="preset-row" role="group" aria-label="Kalite seçimi"></div>
       </div>
 
-      <details class="formats-detail">
-        <summary>Tüm formatlar (gelişmiş)</summary>
-        <div class="formats-list" id="formats-list"></div>
-      </details>
-
       <div class="field">
         <label class="field-label" for="download-dir">İndirme klasörü</label>
         <div class="dir-row">
@@ -70,10 +65,28 @@
         <datalist id="common-dirs"></datalist>
       </div>
 
-      <div class="video-actions">
-        <button type="button" id="add-btn" class="btn btn-primary">Kuyruğa ekle</button>
-        <span class="add-flash" id="add-flash" role="status" hidden>Kuyruğa eklendi ✓</span>
+      <!-- Tek video modu -->
+      <div id="single-controls" hidden>
+        <details class="formats-detail">
+          <summary>Tüm formatlar (gelişmiş)</summary>
+          <div class="formats-list" id="formats-list"></div>
+        </details>
+        <div class="video-actions">
+          <button type="button" id="add-btn" class="btn btn-primary">Kuyruğa ekle</button>
+          <span class="add-flash" id="add-flash" role="status" hidden>Kuyruğa eklendi ✓</span>
+        </div>
       </div>
+
+      <!-- Çoklu video modu -->
+      <div id="playlist-controls" hidden>
+        <p class="playlist-hint">Her video için ayrı indirme oluşturulur, hepsi aynı kalitede.</p>
+        <ul id="playlist-entries" class="entries"></ul>
+        <div class="video-actions">
+          <button type="button" id="add-all-btn" class="btn btn-primary">Tümünü kuyruğa ekle</button>
+          <span class="add-flash" id="add-all-flash" role="status" hidden>Hepsi kuyruğa eklendi ✓</span>
+        </div>
+      </div>
+
       <p class="error" id="video-error" role="alert" hidden></p>
     </section>
 

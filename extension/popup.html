@@ -45,14 +45,10 @@
 
     <p class="error" id="error" role="alert" hidden></p>
 
-    <div id="controls" hidden>
+    <!-- Hem tek video hem oynatma listesi için paylaşılan ayarlar. -->
+    <div id="shared-controls" hidden>
       <span class="lbl">Kalite</span>
       <div class="preset-row" id="preset-row" role="group" aria-label="Kalite"></div>
-
-      <details class="fmt-detail">
-        <summary>Tüm formatlar</summary>
-        <div class="fmt-list" id="fmt-list"></div>
-      </details>
 
       <div class="opt">
         <label class="lbl" for="dir">İndirme klasörü</label>
@@ -63,9 +59,24 @@
         <datalist id="dirs"></datalist>
         <p class="hint">Gözat ile seçtikten sonra eklentiyi tekrar aç.</p>
       </div>
+    </div>
 
+    <!-- Tek video modu: format ayrıntısı + İndir. -->
+    <div id="single-controls" hidden>
+      <details class="fmt-detail">
+        <summary>Tüm formatlar</summary>
+        <div class="fmt-list" id="fmt-list"></div>
+      </details>
       <button id="download-btn" class="btn btn-primary btn-block">İndir</button>
       <span class="flash" id="flash" role="status" hidden>Kuyruğa eklendi ✓</span>
+    </div>
+
+    <!-- Çoklu video modu: girdi listesi + toplu indirme. -->
+    <div id="playlist-controls" hidden>
+      <p class="hint">Her video için ayrı indirme oluşturulur, hepsi aynı kalitede.</p>
+      <ul id="playlist-entries" class="entries"></ul>
+      <button id="download-all-btn" class="btn btn-primary btn-block">Tümünü indir</button>
+      <span class="flash" id="playlist-flash" role="status" hidden>Hepsi kuyruğa eklendi ✓</span>
     </div>
 
     <div class="queue-box">

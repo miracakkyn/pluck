@@ -99,7 +99,12 @@ class FormatInfo(BaseModel):
 
 
 class FormatsResponse(BaseModel):
-    """POST /api/formats yanıtı."""
+    """Tek bir videonun tarama sonucu.
+
+    `url` yalnızca oynatma listesi girdileri için doldurulur (her girdinin
+    kendi sayfa adresi); tek video durumunda isteğin URL'si zaten bilindiği
+    için boş bırakılır.
+    """
 
     title: str
     formats: list[FormatInfo]
@@ -107,6 +112,20 @@ class FormatsResponse(BaseModel):
     duration: float | None = None
     thumbnail: str | None = None
     uploader: str | None = None
+    url: str | None = None
+
+
+class ScanResponse(BaseModel):
+    """POST /api/formats yanıtı: tek video veya oynatma listesi.
+
+    - `type="video"`  → `video` doludur, `entries` boş.
+    - `type="playlist"` → `entries` doludur (her girdi tam format bilgisiyle).
+    """
+
+    type: Literal["video", "playlist"]
+    video: FormatsResponse | None = None
+    playlist_title: str | None = None
+    entries: list[FormatsResponse] | None = None
 
 
 class ConfigResponse(BaseModel):

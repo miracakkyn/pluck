@@ -73,8 +73,8 @@ function clearError(el) {
 // --- durum --------------------------------------------------------------
 
 let appConfig = null;
-let currentVideo = null;
-let selection = "best"; // preset adı veya ham format_id
+let currentScan = null;    // son tarama (tek video veya playlist)
+let selection = "best";    // preset adı veya ham format_id
 
 // --- başlatma -----------------------------------------------------------
 
@@ -116,6 +116,7 @@ function bindEvents() {
     if (e.key === "Enter") fetchFormats();
   });
   $("#add-btn").addEventListener("click", addToQueue);
+  $("#add-all-btn").addEventListener("click", addAllEntries);
   $("#browse-btn").addEventListener("click", pickFolder);
 }
 
@@ -162,8 +163,12 @@ async function fetchFormats() {
   btn.textContent = "Getiriliyor…";
   try {
     const browser = $("#browser").value || null;
-    currentVideo = await api("POST", "/api/formats", { url, browser });
-    renderVideo(currentVideo);
+    currentScan = await api("POST", "/api/formats", { url, browser });
+    if (currentScan.type === "playlist") {
+      renderPlaylist(currentScan);
+    } else {
+      renderVideo(currentScan.video);
+    }
   } catch (err) {
     showError($("#compose-error"), err.message);
   } finally {
@@ -191,7 +196,97 @@ function renderVideo(video) {
   renderFormatList(video.formats);
   clearError($("#video-error"));
   $("#video-card").hidden = false;
+  $("#single-controls").hidden = false;
+  $("#playlist-controls").hidden = true;
   $("#video-card").scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+function renderPlaylist(scan) {
+  const count = scan.entries.length;
+  $("#video-title").textContent = `${count} video bulundu`;
+  $("#video-uploader").textContent = scan.playlist_title || "";
+  $("#video-duration").textContent = "";
+  $("#video-thumb").hidden = true;
+  $("#video-thumb").removeAttribute("src");
+
+  selection = "best";
+  const presets = scan.entries[0]?.presets || ["best", "1080p", "720p", "480p", "audio"];
+  renderPresets(presets);
+
+  const list = $("#playlist-entries");
+  list.replaceChildren();
+  scan.entries.forEach((entry, i) => {
+    const li = document.createElement("li");
+    li.className = "entry";
+    const title = document.createElement("span");
+    title.className = "entry-title";
+    title.textContent = entry.title || `Video ${i + 1}`;
+    const dur = document.createElement("span");
+    dur.className = "entry-dur mono";
+    dur.textContent = humanDuration(entry.duration);
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "btn btn-primary btn-sm";
+    btn.textContent = "Kuyruğa ekle";
+    btn.addEventListener("click", () => queueEntry(entry, btn));
+    li.append(title, dur, btn);
+    list.appendChild(li);
+  });
+
+  clearError($("#video-error"));
+  $("#video-card").hidden = false;
+  $("#single-controls").hidden = true;
+  $("#playlist-controls").hidden = false;
+  $("#video-card").scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+async function queueEntry(entry, btn) {
+  if (btn) { btn.disabled = true; btn.textContent = "…"; }
+  try {
+    await api("POST", "/api/jobs", {
+      url: entry.url,
+      selection,
+      download_dir: $("#download-dir").value.trim(),
+      browser: $("#browser").value || null,
+    });
+    if (btn) {
+      btn.textContent = "Eklendi ✓";
+      btn.classList.add("added");
+    }
+  } catch (err) {
+    showError($("#video-error"), err.message);
+    if (btn) { btn.disabled = false; btn.textContent = "Kuyruğa ekle"; }
+  }
+}
+
+async function addAllEntries() {
+  if (!currentScan || currentScan.type !== "playlist") return;
+  const btn = $("#add-all-btn");
+  btn.disabled = true;
+  btn.textContent = "Ekleniyor…";
+  try {
+    for (const entry of currentScan.entries) {
+      await api("POST", "/api/jobs", {
+        url: entry.url,
+        selection,
+        download_dir: $("#download-dir").value.trim(),
+        browser: $("#browser").value || null,
+      });
+    }
+    for (const b of document.querySelectorAll("#playlist-entries .btn")) {
+      b.textContent = "Eklendi ✓";
+      b.classList.add("added");
+      b.disabled = true;
+    }
+    const flash = $("#add-all-flash");
+    flash.hidden = false;
+    setTimeout(() => { flash.hidden = true; }, 2500);
+  } catch (err) {
+    showError($("#video-error"), err.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Tümünü kuyruğa ekle";
+  }
 }
 
 function renderPresets(presets) {

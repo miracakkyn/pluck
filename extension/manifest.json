@@ -18,5 +18,11 @@
     "128": "icons/icon128.png"
   },
   "permissions": ["activeTab"],
-  "host_permissions": ["http://127.0.0.1/*"]
+  "host_permissions": ["http://127.0.0.1/*"],
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "pluck@local.app",
+      "strict_min_version": "115.0"
+    }
+  }
 }

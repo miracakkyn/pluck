@@ -17,7 +17,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app import config, ytdlp_engine
 from app.events import event_stream
-from app.models import ConfigResponse, FormatsRequest, FormatsResponse, JobRequest
+from app.models import ConfigResponse, FormatsRequest, JobRequest, ScanResponse
 from app.queue_manager import QueueManager
 from app.ytdlp_engine import EngineError
 
@@ -69,9 +69,9 @@ async def get_config() -> ConfigResponse:
     )
 
 
-@app.post("/api/formats", response_model=FormatsResponse)
-async def post_formats(req: FormatsRequest) -> FormatsResponse:
-    """Verilen URL için mevcut format/çözünürlükleri döndürür."""
+@app.post("/api/formats", response_model=ScanResponse)
+async def post_formats(req: FormatsRequest) -> ScanResponse:
+    """URL'yi tarar; tek video veya oynatma listesi yanıtı döndürür."""
     try:
         return await asyncio.to_thread(
             ytdlp_engine.list_formats, req.url, req.browser

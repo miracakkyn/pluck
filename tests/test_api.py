@@ -4,19 +4,22 @@ from unittest.mock import AsyncMock, patch
 from fastapi.testclient import TestClient
 
 from app.main import app
-from app.models import FormatInfo, FormatsResponse
+from app.models import FormatInfo, FormatsResponse, ScanResponse
 from app.ytdlp_engine import EngineError
 
 client = TestClient(app)
 
-FAKE_RESPONSE = FormatsResponse(
-    title="Mock Video",
-    duration=10.0,
-    thumbnail=None,
-    uploader="X",
-    formats=[FormatInfo(format_id="18", ext="mp4", resolution="640x360",
-                        height=360, kind="combined")],
-    presets=["best", "720p"],
+FAKE_RESPONSE = ScanResponse(
+    type="video",
+    video=FormatsResponse(
+        title="Mock Video",
+        duration=10.0,
+        thumbnail=None,
+        uploader="X",
+        formats=[FormatInfo(format_id="18", ext="mp4", resolution="640x360",
+                            height=360, kind="combined")],
+        presets=["best", "720p"],
+    ),
 )
 
 
@@ -33,7 +36,9 @@ def test_post_formats_success():
     with patch("app.main.ytdlp_engine.list_formats", return_value=FAKE_RESPONSE):
         resp = client.post("/api/formats", json={"url": "https://x/v"})
     assert resp.status_code == 200
-    assert resp.json()["title"] == "Mock Video"
+    body = resp.json()
+    assert body["type"] == "video"
+    assert body["video"]["title"] == "Mock Video"
 
 
 def test_post_formats_blank_url_rejected():

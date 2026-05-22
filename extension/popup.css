@@ -153,6 +153,28 @@ select.input { cursor: pointer; }
 .dir-row { display: flex; gap: 6px; }
 .dir-row .input { flex: 1; }
 
+/* --- çoklu video girdi listesi --- */
+.entries { list-style: none; padding: 0; display: flex; flex-direction: column; gap: 6px; margin-bottom: 11px; }
+.entry {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+.entry-title {
+  flex: 1; min-width: 0;
+  font-size: 12.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.entry-dur { font-size: 11px; color: var(--text-dim); flex-shrink: 0; }
+.btn-sm { padding: 4px 10px; font-size: 11.5px; }
+.btn-sm.added { background: var(--surface-2); color: var(--text-dim); border-color: var(--border-strong); }
+
 /* --- preset'ler --- */
 .preset-row { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 11px; }
 .preset {

@@ -14,7 +14,7 @@ from pathlib import Path
 from yt_dlp import YoutubeDL
 from yt_dlp.utils import YoutubeDLError
 
-from app.models import FormatInfo, FormatsResponse
+from app.models import FormatInfo, FormatsResponse, ScanResponse
 
 # Arayüzde sunulan hazır kalite preset'leri (sıra önemli; "best" varsayılan).
 PRESETS: tuple[str, ...] = ("best", "1080p", "720p", "480p", "audio")
@@ -137,11 +137,14 @@ def _parse_info(info: dict) -> FormatsResponse:
     )
 
 
-def list_formats(url: str, browser: str | None = None) -> FormatsResponse:
-    """Verilen URL için mevcut format/çözünürlükleri döndürür (bloklayan).
+def list_formats(url: str, browser: str | None = None) -> ScanResponse:
+    """URL'yi tarar; tek video ya da oynatma listesi (çoklu video) döndürür.
 
     `browser` verilirse o tarayıcının çerezleri kullanılır — login gerektiren
     siteleri yt-dlp'nin görebilmesi için tarama adımında da gereklidir.
+    Çoklu video sayfalarında her girdi için ayrıca format çıkarımı yapılır
+    (yt-dlp varsayılan davranışı); bu, tüm girdileri kalite seçimiyle birlikte
+    göstermeyi mümkün kılar ama ücreti tarama süresinin artmasıdır.
     """
     options: dict = {"quiet": True, "no_warnings": True, "skip_download": True}
     if browser:
@@ -155,14 +158,24 @@ def list_formats(url: str, browser: str | None = None) -> FormatsResponse:
     if info is None:
         raise EngineError("Video bilgisi alınamadı")
 
-    # Playlist gelirse ilk girdiyi kullan (v1: tek video odaklı).
     if info.get("_type") == "playlist":
-        entries = [e for e in (info.get("entries") or []) if e]
+        entries: list[FormatsResponse] = []
+        for entry in info.get("entries") or []:
+            if not entry:
+                continue
+            parsed = _parse_info(entry)
+            entry_url = (entry.get("webpage_url") or entry.get("original_url")
+                         or entry.get("url"))
+            entries.append(parsed.model_copy(update={"url": entry_url}))
         if not entries:
-            raise EngineError("Bağlantı boş bir oynatma listesi")
-        info = entries[0]
+            raise EngineError("Oynatma listesinde işlenebilir video bulunamadı")
+        return ScanResponse(
+            type="playlist",
+            playlist_title=info.get("title") or "Oynatma listesi",
+            entries=entries,
+        )
 
-    return _parse_info(info)
+    return ScanResponse(type="video", video=_parse_info(info))
 
 
 def download(
