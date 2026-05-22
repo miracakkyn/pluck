@@ -1,0 +1,14 @@
+# Satır sonlarını platformdan bağımsız sabitle (çapraz platform tutarlılığı).
+* text=auto eol=lf
+
+# Windows toplu iş dosyaları CRLF gerektirir.
+*.bat text eol=crlf
+
+# macOS/Linux scriptleri LF olmalı (aksi halde çalışmaz).
+*.sh text eol=lf
+*.command text eol=lf
+
+# İkili dosyalar.
+*.png binary
+*.jpg binary
+*.ico binary
