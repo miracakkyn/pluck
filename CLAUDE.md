@@ -48,11 +48,12 @@ kurulum/başlatma komutları olmalı; bunlar README'de ayrı belgelenir.
 - [x] Sprint 0.5 — DESIGN.md (onaylandı)
 - [x] Sprint 1 — Backend çekirdek (yt-dlp engine + format listeleme)
 - [x] Sprint 2 — İndirme kuyruğu + SSE canlı ilerleme
-- [ ] Sprint 3 — Frontend (tek sayfa web arayüzü)
+- [x] Sprint 3 — Frontend (tek sayfa web arayüzü, koyu tema)
 - [ ] Sprint 4 — Cookie desteği + çapraz platform başlatma scriptleri + README
 - [ ] Sprint 5 — Login'li video testi (kullanıcının üniversite URL'si)
 
-Test: 65 test, %96 kapsam. Çalıştır: `.venv\Scripts\python.exe -m pytest`
+Test: 67 test, %96 kapsam. Çalıştır: `.venv\Scripts\python.exe -m pytest`
+Geliştirme sunucusu: `.venv\Scripts\python.exe -m uvicorn app.main:app --port 8765`
 
 ## v1 kapsamı (yalnızca bunlar)
 

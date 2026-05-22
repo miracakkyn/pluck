@@ -98,6 +98,18 @@ def test_lifespan_starts_and_stops_worker_cleanly():
         assert managed.get("/api/config").status_code == 200
 
 
+def test_index_serves_html():
+    resp = client.get("/")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/html")
+    assert "Video İndirici" in resp.text
+
+
+def test_static_assets_served():
+    assert client.get("/static/app.js").status_code == 200
+    assert client.get("/static/style.css").status_code == 200
+
+
 def test_events_endpoint_is_sse():
     # Sonsuz akışı tüketmemek için event_stream sınırlı bir üreteçle değiştirilir.
     async def _finite(_get_snapshot):

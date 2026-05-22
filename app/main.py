@@ -10,7 +10,8 @@ import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 
 from app import config, ytdlp_engine
 from app.events import event_stream
@@ -35,6 +36,12 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="Genel Amaçlı Video İndirme Aracı", lifespan=lifespan)
+
+
+@app.get("/", include_in_schema=False)
+async def index() -> FileResponse:
+    """Tek sayfa web arayüzünü servis eder."""
+    return FileResponse(config.WEB_DIR / "index.html")
 
 
 @app.get("/api/config", response_model=ConfigResponse)
@@ -94,3 +101,7 @@ async def get_events() -> StreamingResponse:
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache"},
     )
+
+
+# web/ varlıkları (app.js, style.css) /static altında servis edilir.
+app.mount("/static", StaticFiles(directory=config.WEB_DIR), name="static")
