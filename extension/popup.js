@@ -253,6 +253,7 @@ async function queueEntry(entry, btn) {
       selection,
       download_dir: $("#dir").value.trim(),
       browser: $("#browser").value || null,
+      title: entry.title || null,
     });
     if (btn) {
       btn.textContent = "Eklendi ✓";
@@ -276,6 +277,7 @@ async function downloadAllEntries() {
         selection,
         download_dir: $("#dir").value.trim(),
         browser: $("#browser").value || null,
+        title: entry.title || null,
       });
     }
     for (const b of document.querySelectorAll("#playlist-entries .btn")) {

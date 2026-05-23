@@ -77,6 +77,8 @@ class QueueManager:
             selection=request.selection,
             download_dir=request.download_dir,
             browser=request.browser,
+            title=request.title or "",
+            title_locked=bool(request.title),
         )
         self._pending.put_nowait(job_id)
         return job_id
@@ -163,6 +165,7 @@ class QueueManager:
                 selection=job.selection,
                 download_dir=job.download_dir,
                 browser=job.browser,
+                title=job.title if job.title_locked else None,
                 progress_hook=self._make_progress_hook(job),
             )
         except _Cancelled:
@@ -209,7 +212,7 @@ class QueueManager:
                 job.speed = _format_speed(data.get("speed"))
                 job.eta = _format_eta(data.get("eta"))
                 info = data.get("info_dict") or {}
-                if info.get("title"):
+                if info.get("title") and not job.title_locked:
                     job.title = info["title"]
             elif status == "finished":
                 job.progress = 100.0

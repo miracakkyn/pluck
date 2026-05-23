@@ -258,19 +258,36 @@ def _extract_each(
     return entries
 
 
+_FILENAME_UNSAFE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+
+
+def _sanitize_for_filename(text: str, max_len: int = 80) -> str:
+    """Dosya adı için güvenli karakterlere indir."""
+    cleaned = _FILENAME_UNSAFE.sub("_", text).strip().rstrip(".")
+    return cleaned[:max_len] or "video"
+
+
 def download(
     *,
     url: str,
     selection: str,
     download_dir: str | Path,
     browser: str | None = None,
+    title: str | None = None,
     progress_hook: Callable[[dict], None] | None = None,
 ) -> None:
     """Videoyu indirir ve gerekirse ffmpeg ile birleştirir (bloklayan).
 
     `progress_hook` yt-dlp'nin durum sözlüğüyle düzenli çağrılır. İptal,
     hook'un içeriden bir istisna fırlatmasıyla sağlanır (queue_manager).
+    `title` verilirse dosya adının başında o kullanılır (jenerik m3u8
+    "playlist" yerine "Video 1" gibi).
     """
+    if title:
+        safe_title = _sanitize_for_filename(title)
+        outtmpl = f"{safe_title} [%(id)s] {selection}.%(ext)s"
+    else:
+        outtmpl = f"%(title)s [%(id)s] {selection}.%(ext)s"
     options: dict = {
         "format": build_format_selector(selection),
         "merge_output_format": "mp4",
@@ -278,7 +295,7 @@ def download(
         # Kalite/format seçimi dosya adına yazılır: aynı videoyu farklı
         # kalitede indirince çakışma olmaz (yt-dlp "zaten indirilmiş" deyip
         # atlamaz). `selection` doğrulanmış, dosya-adı-güvenli bir dizedir.
-        "outtmpl": f"%(title)s [%(id)s] {selection}.%(ext)s",
+        "outtmpl": outtmpl,
         # HLS (m3u8) ve DASH parçalarını paralel indir. Yüksek RTT'li CDN'lerde
         # (örn. ~62ms BunnyCDN edge) TCP slow-start nedeniyle her bağlantı ~200-300
         # KiB/s'de takılır; paralellik bu tavanın katları kadar toplam hız verir.

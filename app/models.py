@@ -138,12 +138,18 @@ class ConfigResponse(BaseModel):
 
 
 class JobRequest(BaseModel):
-    """POST /api/jobs gövdesi — kuyruğa bir indirme işi ekler."""
+    """POST /api/jobs gövdesi — kuyruğa bir indirme işi ekler.
+
+    `title` verilirse dosya adında o kullanılır (m3u8 URL'lerinden gelen
+    jenerik "playlist" yerine "Video 1" vb.). Yoksa yt-dlp'nin algıladığı
+    title kullanılır.
+    """
 
     url: str
     selection: str          # preset adı ("best", "720p", ...) veya ham format_id
     download_dir: str
     browser: str | None = None
+    title: str | None = None
 
     @field_validator("url")
     @classmethod
@@ -197,6 +203,7 @@ class Job:
     filename: str | None = None
     error: str | None = None
     cancel_requested: bool = False  # dahili; snapshot'a dahil edilmez
+    title_locked: bool = False  # True ise progress hook title'i ezmez
 
     def snapshot(self) -> dict:
         """SSE/JSON için serileştirilebilir görüntü (dahili bayraklar hariç)."""
