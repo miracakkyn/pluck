@@ -99,6 +99,10 @@ function populateBrowsers(browsers) {
     opt.textContent = name.charAt(0).toUpperCase() + name.slice(1);
     select.appendChild(opt);
   }
+  // Varsayılan: firefox (Firefox çerezleri Firefox açıkken bile okunabilir).
+  if (browsers.includes("firefox")) {
+    select.value = "firefox";
+  }
 }
 
 function populateCommonDirs(dirs) {
@@ -118,6 +122,7 @@ function bindEvents() {
   $("#add-btn").addEventListener("click", addToQueue);
   $("#add-all-btn").addEventListener("click", addAllEntries);
   $("#browse-btn").addEventListener("click", pickFolder);
+  $("#clear-queue-btn").addEventListener("click", clearFinishedJobs);
 }
 
 // --- klasör seçici ------------------------------------------------------
@@ -482,6 +487,14 @@ async function cancelJob(jobId) {
     await api("DELETE", `/api/jobs/${jobId}`);
   } catch {
     /* iş zaten bitmiş olabilir; SSE bir sonraki çerçevede düzeltir */
+  }
+}
+
+async function clearFinishedJobs() {
+  try {
+    await api("POST", "/api/jobs/clear");
+  } catch {
+    /* önemsiz; bir sonraki SSE çerçevesi yine güncel listeyi gönderir */
   }
 }
 

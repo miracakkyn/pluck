@@ -101,6 +101,17 @@ class QueueManager:
         # completed / error / cancelled durumlarında işlem yok.
         return job
 
+    def clear_finished(self) -> int:
+        """Tamamlanmış/hatalı/iptal edilmiş işleri kuyruktan kaldırır.
+
+        Aktif (queued/downloading) işler korunur. Kaldırılan iş sayısını döndürür.
+        """
+        finished = {"completed", "error", "cancelled"}
+        to_remove = [jid for jid, job in self._jobs.items() if job.status in finished]
+        for jid in to_remove:
+            del self._jobs[jid]
+        return len(to_remove)
+
     def start(self) -> None:
         """Worker coroutine'ini başlatır (çalışan event loop gerektirir).
 

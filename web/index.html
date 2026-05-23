@@ -92,7 +92,11 @@
 
     <!-- 3) İndirme kuyruğu + canlı ilerleme -->
     <section class="card queue-card" aria-labelledby="queue-title">
-      <h2 id="queue-title" class="card-title">İndirme kuyruğu</h2>
+      <div class="queue-header">
+        <h2 id="queue-title" class="card-title">İndirme kuyruğu</h2>
+        <button type="button" id="clear-queue-btn" class="btn-text"
+                title="Tamamlanmış/iptal/hatalı işleri kuyruktan kaldır">Bitenleri temizle</button>
+      </div>
       <p class="queue-empty" id="queue-empty">Henüz iş yok. Bir bağlantı ekleyin.</p>
       <ul class="queue" id="queue" aria-live="polite"></ul>
     </section>

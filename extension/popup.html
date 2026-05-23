@@ -80,7 +80,11 @@
     </div>
 
     <div class="queue-box">
-      <p class="queue-head">İndirme kuyruğu</p>
+      <div class="queue-header">
+        <p class="queue-head">İndirme kuyruğu</p>
+        <button type="button" id="clear-queue-btn" class="btn-text"
+                title="Tamamlanmış/iptal/hatalı işleri kuyruktan kaldır">Bitenleri temizle</button>
+      </div>
       <p id="queue-empty" class="queue-empty">Henüz indirme yok.</p>
       <ul id="queue" class="queue" aria-live="polite"></ul>
     </div>

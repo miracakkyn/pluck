@@ -199,6 +199,10 @@ def download(
         # kalitede indirince çakışma olmaz (yt-dlp "zaten indirilmiş" deyip
         # atlamaz). `selection` doğrulanmış, dosya-adı-güvenli bir dizedir.
         "outtmpl": f"%(title)s [%(id)s] {selection}.%(ext)s",
+        # HLS (m3u8) ve DASH parçalarını paralel indir — CDN'den servis edilen
+        # üniversite/streaming sitelerinde 5-10x hız artışı sağlar. Tek dosya
+        # progressive indirmelerde hiçbir etkisi yoktur (no-op).
+        "concurrent_fragment_downloads": 5,
         "quiet": True,
         "no_warnings": True,
         "noprogress": True,

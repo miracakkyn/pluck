@@ -21,7 +21,7 @@
   "host_permissions": ["http://127.0.0.1/*"],
   "browser_specific_settings": {
     "gecko": {
-      "id": "pluck@local.app",
+      "id": "pluck@miracakkyn.github.io",
       "strict_min_version": "115.0"
     }
   }

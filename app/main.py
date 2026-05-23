@@ -109,6 +109,12 @@ async def delete_job(job_id: str) -> dict:
     return job.snapshot()
 
 
+@app.post("/api/jobs/clear")
+async def clear_finished_jobs() -> dict:
+    """Tamamlanmış / hatalı / iptal edilmiş işleri kuyruktan temizler."""
+    return {"cleared": queue_manager.clear_finished()}
+
+
 @app.get("/api/events")
 async def get_events() -> StreamingResponse:
     """Canlı indirme ilerlemesi akışı (Server-Sent Events)."""

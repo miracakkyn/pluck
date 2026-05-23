@@ -30,3 +30,8 @@ Thumbs.db
 # Araç durum dosyaları (projeye ait değil)
 .maestro/
 .claude/
+
+# Eklenti paketleme çıktıları (imzalı/imzasız XPI)
+extension/web-ext-artifacts/
+*.xpi
+*.zip

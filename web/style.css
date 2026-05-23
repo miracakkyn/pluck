@@ -152,6 +152,25 @@ select.text-input { cursor: pointer; }
   color: var(--text);
 }
 .btn-secondary:hover { border-color: var(--accent); }
+.btn-text {
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  padding: 3px 8px;
+  border-radius: 5px;
+}
+.btn-text:hover { color: var(--danger); background: rgba(248, 113, 113, 0.08); }
+
+.queue-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+.queue-header .card-title { margin-bottom: 0; }
 
 .dir-row { display: flex; gap: 8px; }
 .dir-row .text-input { flex: 1; }

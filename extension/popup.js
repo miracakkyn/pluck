@@ -148,6 +148,11 @@ async function boot() {
     opt.textContent = name.charAt(0).toUpperCase() + name.slice(1);
     $("#browser").appendChild(opt);
   }
+  // Varsayılan çerez: firefox (Firefox açıkken bile çerez okunabilir; en
+  // güvenilir seçenek). Kullanıcı isterse değiştirebilir.
+  if (appConfig.browsers.includes("firefox")) {
+    $("#browser").value = "firefox";
+  }
   for (const dir of appConfig.common_dirs) {
     const opt = document.createElement("option");
     opt.value = dir;
@@ -463,6 +468,15 @@ async function cancelJob(jobId) {
   }
 }
 
+async function clearFinishedJobs() {
+  try {
+    await api("POST", "/api/jobs/clear");
+    pollJobs();
+  } catch {
+    /* önemsiz */
+  }
+}
+
 // --- klasör seçici ------------------------------------------------------
 
 async function pickFolder() {
@@ -482,5 +496,6 @@ $("#rescan-btn").addEventListener("click", scanPage);
 $("#download-btn").addEventListener("click", startDownload);
 $("#download-all-btn").addEventListener("click", downloadAllEntries);
 $("#browse-btn").addEventListener("click", pickFolder);
+$("#clear-queue-btn").addEventListener("click", clearFinishedJobs);
 
 boot();

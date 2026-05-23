@@ -87,6 +87,18 @@ def test_delete_unknown_job_is_404():
     assert resp.status_code == 404
 
 
+def test_clear_finished_jobs_endpoint(tmp_path):
+    # Bir iş ekleyip iptal edelim (kuyrukta finished olur), sonra temizleyelim.
+    created = client.post("/api/jobs", json={
+        "url": "https://example.com/v", "selection": "best",
+        "download_dir": str(tmp_path),
+    }).json()["job_id"]
+    client.delete(f"/api/jobs/{created}")  # cancelled
+    resp = client.post("/api/jobs/clear")
+    assert resp.status_code == 200
+    assert resp.json()["cleared"] >= 1
+
+
 def test_delete_queued_job_cancels_it(tmp_path):
     created = client.post("/api/jobs", json={
         "url": "https://example.com/v", "selection": "best",

@@ -189,3 +189,28 @@ class TestCancel:
         await _wait_for(qm, job_id, "downloading")
         await qm.stop()
         assert qm.get(job_id).cancel_requested is True
+
+
+class TestClearFinished:
+    async def test_removes_completed_keeps_active(self, tmp_path):
+        qm = QueueManager(engine_download=_ok_download)
+        qm.start()
+        # Bir iş tamamlansın
+        done_id = qm.enqueue(_req(tmp_path))
+        await _wait_for(qm, done_id, "completed")
+        await qm.stop()
+        # Bir iş queued, bir iş cancelled olsun
+        queued_id = qm.enqueue(_req(tmp_path))
+        cancelled_id = qm.enqueue(_req(tmp_path))
+        qm.cancel(cancelled_id)
+        # Şimdi temizle
+        removed = qm.clear_finished()
+        assert removed == 2  # done + cancelled
+        assert qm.get(done_id) is None
+        assert qm.get(cancelled_id) is None
+        assert qm.get(queued_id) is not None  # queued korunmalı
+
+    def test_clear_with_no_finished_returns_zero(self, tmp_path):
+        qm = QueueManager(engine_download=_ok_download)
+        qm.enqueue(_req(tmp_path))  # queued kalır
+        assert qm.clear_finished() == 0
