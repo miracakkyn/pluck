@@ -3,10 +3,14 @@
 # https://github.com/miracakkyn/pluck
 #
 # Çalıştır (Terminal'e yapıştır + Enter):
-#   curl -fsSL https://raw.githubusercontent.com/miracakkyn/pluck/main/install-mac.sh | bash
+#   bash -c "$(curl -fsSL https://raw.githubusercontent.com/miracakkyn/pluck/main/install-mac.sh)"
+#
+# NOT: `curl | bash` ŞEKLİ KULLANMA — sudo parola promptunu engeller
+# (terminal stdin'i pipe'a takılır). Yukarıdaki `bash -c "$(curl ...)"`
+# Homebrew'un kendi resmi installer'ının kullandığı yöntemdir; çalışır.
 #
 # Yaptıkları:
-#   1. Homebrew yoksa kurar (sudo şifresi ister)
+#   1. Homebrew yoksa kurar (Mac parolası sorar — admin kullanıcı gerek)
 #   2. python@3.13, ffmpeg, aria2, deno, git'i brew ile kurar
 #   3. Pluck'ı ~/pluck dizinine klonlar (varsa günceller)
 #   4. start.sh ile motoru başlatır; tarayıcı 127.0.0.1:8765'e açılır
@@ -25,8 +29,11 @@ step "Pluck kurulumu başlıyor (Mac)..."
 
 # 1. Homebrew
 if ! command -v brew >/dev/null 2>&1; then
-    step "Homebrew bulunamadı, kuruluyor (sudo parolanızı isteyecek)"
-    NONINTERACTIVE=1 /bin/bash -c \
+    step "Homebrew bulunamadı, kuruluyor"
+    printf '  \033[33m!\033[0m Mac parolan istenecek — bu normal (Homebrew /opt/homebrew yazma izni için).\n'
+    printf '    Admin kullanıcı değilsen kurulum başarısız olur; o Mac'\''te admin olan biriyle yap.\n\n'
+    # NONINTERACTIVE BIRAKMA — parola prompt'unun çalışmasına izin ver.
+    /bin/bash -c \
         "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
     # Yeni kurulan brew'u bu oturumun PATH'ine ekle (Apple Silicon + Intel).
     if [[ -x /opt/homebrew/bin/brew ]]; then
