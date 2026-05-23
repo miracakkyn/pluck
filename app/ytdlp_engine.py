@@ -205,10 +205,11 @@ def download(
         # kalitede indirince çakışma olmaz (yt-dlp "zaten indirilmiş" deyip
         # atlamaz). `selection` doğrulanmış, dosya-adı-güvenli bir dizedir.
         "outtmpl": f"%(title)s [%(id)s] {selection}.%(ext)s",
-        # HLS (m3u8) ve DASH parçalarını paralel indir — CDN'den servis edilen
-        # üniversite/streaming sitelerinde 5-10x hız artışı sağlar. Tek dosya
-        # progressive indirmelerde hiçbir etkisi yoktur (no-op).
-        "concurrent_fragment_downloads": 5,
+        # HLS (m3u8) ve DASH parçalarını paralel indir. Yüksek RTT'li CDN'lerde
+        # (örn. ~62ms BunnyCDN edge) TCP slow-start nedeniyle her bağlantı ~200-300
+        # KiB/s'de takılır; paralellik bu tavanın katları kadar toplam hız verir.
+        # Tek-dosya MP4 progressive indirmelerde hiçbir etkisi yoktur (no-op).
+        "concurrent_fragment_downloads": 10,
         "quiet": True,
         "no_warnings": True,
         "noprogress": True,
@@ -229,7 +230,10 @@ def download(
         }
         options["external_downloader_args"] = {
             "aria2c": [
-                "-x16", "-s16", "-k1M",
+                "-x16", "-s16",
+                # min split size verilmediğinde aria2c default 20MB; küçük HLS
+                # fragment'lerini de bölmesi için 256K'ya indir.
+                "-k256K",
                 "--summary-interval=0",
                 "--console-log-level=warn",
                 "--max-tries=3",
