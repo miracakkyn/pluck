@@ -41,6 +41,7 @@ başlatma scripti tarafından otomatik kurulur — elle kurmanıza gerek yoktur.
 winget install Python.Python.3.13
 winget install Gyan.FFmpeg
 winget install DenoLand.Deno      # isteğe bağlı — bkz. "deno notu"
+winget install aria2.aria2        # isteğe bağlı — bkz. "aria2c notu"
 ```
 
 ### macOS (Homebrew)
@@ -49,12 +50,19 @@ winget install DenoLand.Deno      # isteğe bağlı — bkz. "deno notu"
 brew install python@3.13
 brew install ffmpeg
 brew install deno                  # isteğe bağlı — bkz. "deno notu"
+brew install aria2                 # isteğe bağlı — bkz. "aria2c notu"
 ```
 
 > **deno notu:** yt-dlp, YouTube'da bazı formatları çıkarmak için bir
 > JavaScript çalışma zamanı (`deno`) ister. Kurulu değilse uygulama yine
 > çalışır ancak YouTube'da bazı formatlar eksik kalabilir. YouTube dışı
 > sitelerde gerekmez.
+
+> **aria2c notu:** `aria2c` kuruluysa Pluck onu otomatik kullanır ve HLS
+> stream'lerini paralel HTTP bağlantılarıyla (her parça için 16'ya kadar)
+> **2-3x daha hızlı** indirir — özellikle BunnyCDN/üniversite portallarında
+> belirgin fark. Yoksa yt-dlp'nin yerleşik indiricisi kullanılır (çalışır,
+> sadece daha yavaş).
 
 ---
 

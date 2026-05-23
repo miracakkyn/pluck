@@ -8,6 +8,7 @@ fonksiyonlar (`list_formats`, `download`) çağıran taraf tarafından
 from __future__ import annotations
 
 import re
+import shutil
 from collections.abc import Callable
 from pathlib import Path
 
@@ -15,6 +16,11 @@ from yt_dlp import YoutubeDL
 from yt_dlp.utils import YoutubeDLError
 
 from app.models import FormatInfo, FormatsResponse, ScanResponse
+
+# aria2c sistemde varsa harici indirici olarak kullanılır (her parça için 16
+# paralel HTTP bağlantısı; CDN'in per-bağlantı hız limitini bypass eder).
+# Yoksa yt-dlp'nin yerleşik indiricisi kullanılır (yine de paralel parçalı).
+_ARIA2C_AVAILABLE: bool = shutil.which("aria2c") is not None
 
 # Arayüzde sunulan hazır kalite preset'leri (sıra önemli; "best" varsayılan).
 PRESETS: tuple[str, ...] = ("best", "1080p", "720p", "480p", "audio")
@@ -214,6 +220,22 @@ def download(
         options["postprocessors"] = [
             {"key": "FFmpegExtractAudio", "preferredcodec": "mp3"}
         ]
+    if _ARIA2C_AVAILABLE:
+        # Her HLS/HTTP parçası için aria2c 16 paralel bağlantı açar; toplam
+        # akış = (concurrent_fragment_downloads) × (aria2c connections).
+        options["external_downloader"] = {
+            "http": "aria2c",
+            "m3u8_native": "aria2c",
+        }
+        options["external_downloader_args"] = {
+            "aria2c": [
+                "-x16", "-s16", "-k1M",
+                "--summary-interval=0",
+                "--console-log-level=warn",
+                "--max-tries=3",
+                "--retry-wait=1",
+            ],
+        }
     try:
         with YoutubeDL(options) as ydl:
             ydl.download([url])
