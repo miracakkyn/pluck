@@ -181,7 +181,81 @@ def list_formats(url: str, browser: str | None = None) -> ScanResponse:
             entries=entries,
         )
 
+    # Tek video çıktı — ama sayfa JS-tabanlı bir oynatıcı kullanıyor olabilir
+    # (videolar HTML iframe yerine JSON içinde gömülü). Sayfayı tarayıp
+    # gizli b-cdn.net m3u8 URL'leri bul; birden fazlaysa playlist gibi sun.
+    extra_urls = _scan_page_for_video_urls(url, browser)
+    if len(extra_urls) > 1:
+        playlist_entries = _extract_each(extra_urls, browser, referer=url)
+        if len(playlist_entries) > 1:
+            return ScanResponse(
+                type="playlist",
+                playlist_title=info.get("title") or "Oynatma listesi",
+                entries=playlist_entries,
+            )
+
     return ScanResponse(type="video", video=_parse_info(info))
+
+
+# --- JS-tabanlı sayfalar için gizli video URL'i bulma ---------------------
+
+_BCDN_M3U8 = re.compile(
+    r"https://[a-z0-9.-]+\.b-cdn\.net/[a-f0-9-]+/playlist\.m3u8",
+    re.IGNORECASE,
+)
+
+
+def _scan_page_for_video_urls(page_url: str, browser: str | None) -> list[str]:
+    """Sayfayı çekip içindeki BunnyCDN m3u8 URL'lerini benzersiz olarak döndürür.
+
+    JS-tabanlı oynatıcılar (uzemykoabt.com vb.) videoları HTML iframe yerine
+    JSON içinde gömüyor; yt-dlp'nin generic extractor'ı bunlardan yalnızca
+    birini bulabiliyor. Burada HTML'i regex ile tarıyoruz.
+    """
+    options: dict = {"quiet": True, "no_warnings": True, "skip_download": True}
+    if browser:
+        options["cookiesfrombrowser"] = (browser,)
+    try:
+        with YoutubeDL(options) as ydl:
+            html = ydl.urlopen(page_url).read().decode("utf-8", errors="replace")
+        # JSON içindeki escape edilmiş URL'leri normalize et.
+        html = html.replace("\\/", "/")
+        return list(dict.fromkeys(_BCDN_M3U8.findall(html)))
+    except Exception:
+        return []
+
+
+def _extract_each(
+    video_urls: list[str],
+    browser: str | None,
+    referer: str,
+) -> list[FormatsResponse]:
+    """Her video URL'sini ayrı ayrı yt-dlp'ye verir; başarısızları atlar.
+
+    `referer` BunnyCDN'in m3u8 erişim kontrolü için gerekli (yoksa 403).
+    """
+    options: dict = {
+        "quiet": True, "no_warnings": True, "skip_download": True,
+        "http_headers": {"Referer": referer},
+    }
+    if browser:
+        options["cookiesfrombrowser"] = (browser,)
+    entries: list[FormatsResponse] = []
+    for idx, video_url in enumerate(video_urls):
+        try:
+            with YoutubeDL(options) as ydl:
+                entry_info = ydl.extract_info(video_url, download=False)
+            if entry_info:
+                # m3u8 URL'inden gelen jenerik "playlist" title'i kullanışsız;
+                # sıralı numara ver ki UI'da ayırt edilebilsin.
+                title = (entry_info.get("title") or "").strip().lower()
+                if title in ("", "playlist", "index"):
+                    entry_info["title"] = f"Video {idx + 1}"
+                parsed = _parse_info(entry_info)
+                entries.append(parsed.model_copy(update={"url": video_url}))
+        except YoutubeDLError:
+            continue
+    return entries
 
 
 def download(
@@ -217,6 +291,10 @@ def download(
     }
     if browser:
         options["cookiesfrombrowser"] = (browser,)
+    # BunnyCDN m3u8 URL'leri Referer header'i ister (yoksa 403). Generic bir
+    # mediadelivery refereri her zaman çalışır; başka sitelere zarar vermez.
+    if ".b-cdn.net/" in url and url.endswith(".m3u8"):
+        options["http_headers"] = {"Referer": "https://iframe.mediadelivery.net/"}
     if selection == "audio":
         options["postprocessors"] = [
             {"key": "FFmpegExtractAudio", "preferredcodec": "mp3"}
