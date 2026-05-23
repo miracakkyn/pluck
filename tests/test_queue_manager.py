@@ -21,7 +21,7 @@ def _req(tmp_path, selection="best"):
 
 # --- sahte engine_download fonksiyonları ---------------------------------
 
-def _ok_download(*, url, selection, download_dir, browser, progress_hook):
+def _ok_download(*, url, selection, download_dir, browser, progress_hook, **_kwargs):
     progress_hook({"status": "downloading", "downloaded_bytes": 5,
                    "total_bytes": 10, "info_dict": {"title": "Test Başlık"}})
     progress_hook({"status": "downloading", "downloaded_bytes": 10,
@@ -29,15 +29,15 @@ def _ok_download(*, url, selection, download_dir, browser, progress_hook):
     progress_hook({"status": "finished", "filename": "video.mp4"})
 
 
-def _fail_download(*, url, selection, download_dir, browser, progress_hook):
+def _fail_download(*, url, selection, download_dir, browser, progress_hook, **_kwargs):
     raise EngineError("indirme basarisiz")
 
 
-def _crash_download(*, url, selection, download_dir, browser, progress_hook):
+def _crash_download(*, url, selection, download_dir, browser, progress_hook, **_kwargs):
     raise RuntimeError("beklenmeyen ic hata")
 
 
-def _slow_download(*, url, selection, download_dir, browser, progress_hook):
+def _slow_download(*, url, selection, download_dir, browser, progress_hook, **_kwargs):
     for i in range(1, 300):
         progress_hook({"status": "downloading", "downloaded_bytes": i,
                        "total_bytes": 300})
@@ -45,7 +45,7 @@ def _slow_download(*, url, selection, download_dir, browser, progress_hook):
     progress_hook({"status": "finished", "filename": "video.mp4"})
 
 
-def _ytdlp_like_download(*, url, selection, download_dir, browser, progress_hook):
+def _ytdlp_like_download(*, url, selection, download_dir, browser, progress_hook, **_kwargs):
     """Gerçek yt-dlp davranışını taklit eder: progress hook'tan fırlayan istisna
     yakalanıp EngineError'a sarmalanır (yt-dlp onu DownloadError'a sarmalar)."""
     try:
