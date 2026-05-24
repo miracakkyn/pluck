@@ -25,5 +25,8 @@ fi
 echo "Bagimliliklar denetleniyor..."
 .venv/bin/python -m pip install -q --upgrade pip
 .venv/bin/python -m pip install -q -r requirements.txt
+# yt-dlp YouTube/CDN ekstraktorlerini sik gunceller; eski surum YouTube'da
+# sessizce fail olur. Her baslangicta guncel surume cek.
+.venv/bin/python -m pip install -q --upgrade yt-dlp
 
 .venv/bin/python run.py

@@ -45,8 +45,9 @@ fi
 ok "Homebrew hazır ($(brew --version | head -1))"
 
 # 2. Bağımlılıklar
-step "Bağımlılıklar kuruluyor: python@3.13, ffmpeg, aria2, deno, git"
-brew install python@3.13 ffmpeg aria2 deno git
+# python-tk@3.13: tkinter yedek klasör seçici (birincil AppleScript fallback).
+step "Bağımlılıklar kuruluyor: python@3.13, python-tk@3.13, ffmpeg, aria2, deno, git"
+brew install python@3.13 python-tk@3.13 ffmpeg aria2 deno git
 ok "Tüm bağımlılıklar kurulu"
 
 # 3. Repo (klon ya da güncelle)

@@ -21,6 +21,9 @@ if errorlevel 1 (
     pause
     exit /b 1
 )
+REM yt-dlp YouTube/CDN ekstraktorlerini sik gunceller; eski surum YouTube'da
+REM sessizce fail olur. Her baslangicta guncel surume cek.
+".venv\Scripts\python.exe" -m pip install -q --upgrade yt-dlp
 
 ".venv\Scripts\python.exe" run.py
 pause
