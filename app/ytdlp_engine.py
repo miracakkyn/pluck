@@ -22,6 +22,10 @@ from app.models import FormatInfo, FormatsResponse, ScanResponse
 # Yoksa yt-dlp'nin yerleşik indiricisi kullanılır (yine de paralel parçalı).
 _ARIA2C_AVAILABLE: bool = shutil.which("aria2c") is not None
 
+# ffmpeg birleştirme (bv*+ba) ve ses çıkarma (audio→mp3) için zorunlu.
+# Yoksa kullanıcıya net hata gösterilir, sessizce yarım dosya bırakmak yerine.
+_FFMPEG_AVAILABLE: bool = shutil.which("ffmpeg") is not None
+
 # Arayüzde sunulan hazır kalite preset'leri (sıra önemli; "best" varsayılan).
 PRESETS: tuple[str, ...] = ("best", "1080p", "720p", "480p", "audio")
 
@@ -46,13 +50,24 @@ class EngineError(Exception):
     """yt-dlp kaynaklı, kullanıcıya gösterilebilir hata."""
 
 
+_ERROR_MSG_MAX = 500
+
+
 def _clean_error(exc: Exception) -> str:
-    """yt-dlp hata metnini ANSI kodlarından ve 'ERROR:' önekinden arındırır."""
+    """yt-dlp hata metnini ANSI kodlarından ve 'ERROR:' önekinden arındırır.
+
+    Tüm mesajı korur (ilk satır kesilmez); YouTube hataları çoğu zaman
+    "Sign in to confirm…" gibi açıklayıcı detayı 2. satırda taşıdığı için
+    önemli. En fazla 500 karakter — UI'ı bozmaz, ama bağlam kaybolmaz.
+    """
     message = _ANSI_RE.sub("", str(exc)).strip()
     if message.upper().startswith("ERROR:"):
         message = message[len("ERROR:"):].strip()
-    first_line = message.splitlines()[0].strip() if message else ""
-    return first_line or "Bilinmeyen indirme hatası"
+    if not message:
+        return "Bilinmeyen indirme hatası"
+    if len(message) > _ERROR_MSG_MAX:
+        message = message[:_ERROR_MSG_MAX].rstrip() + "…"
+    return message
 
 
 def build_format_selector(selection: str) -> str:
@@ -267,6 +282,53 @@ def _sanitize_for_filename(text: str, max_len: int = 80) -> str:
     return cleaned[:max_len] or "video"
 
 
+# İndirme yarıda kalırsa geride kalan parça dosyaları (yt-dlp'nin
+# .fNNN.mp4.part / .fNNN.m4a.part / .ytdl / aria2c'nin .aria2 kalıntıları).
+_LEFTOVER_SUFFIXES: tuple[str, ...] = (
+    ".part", ".ytdl", ".aria2", ".temp",
+)
+
+
+def _selection_needs_ffmpeg(selection: str) -> bool:
+    """Bu seçim ffmpeg gerektiriyor mu (merge ya da ses çıkarma)?
+
+    Tüm preset'ler `bv*+ba` türevi olduğundan video+ses merge ister;
+    `audio` ise mp3 postprocessor ister. Ham format_id verilirse `+ba`
+    yedeği eklendiği için (build_format_selector) yine merge olasıdır.
+    """
+    return True
+
+
+def _cleanup_artifacts(download_dir: Path, info: dict | None) -> None:
+    """Yarım kalan parça/temp dosyaları temizler.
+
+    Glob shell metakarakterlerini etkisizleştirmek için yt-dlp'nin verdiği
+    `id` ve sanitize edilmiş başlık üzerinden filtreler. Hata yutar —
+    cleanup'ın kendisi indirme hatasını gizlememeli.
+    """
+    if not info:
+        return
+    video_id = str(info.get("id") or "").strip()
+    if not video_id:
+        return
+    try:
+        for entry in download_dir.iterdir():
+            if not entry.is_file():
+                continue
+            name = entry.name
+            # Hem [id] içeren hem de bilinen leftover uzantısıyla biten dosyalar.
+            if f"[{video_id}]" not in name:
+                continue
+            if not any(name.endswith(suffix) for suffix in _LEFTOVER_SUFFIXES):
+                continue
+            try:
+                entry.unlink(missing_ok=True)
+            except OSError:
+                pass
+    except OSError:
+        pass
+
+
 def download(
     *,
     url: str,
@@ -282,16 +344,54 @@ def download(
     hook'un içeriden bir istisna fırlatmasıyla sağlanır (queue_manager).
     `title` verilirse dosya adının başında o kullanılır (jenerik m3u8
     "playlist" yerine "Video 1" gibi).
+
+    İndirme bittikten sonra dosyanın diskte gerçekten var olduğu doğrulanır;
+    yoksa (ffmpeg merge sessizce başarısız olduysa) EngineError fırlatır.
+    Hatada yarım kalan .part / .ytdl / .aria2 dosyaları temizlenir.
     """
+    # ffmpeg her preset için gerekli (video+ses merge ya da audio→mp3). Yoksa
+    # erkenden net hata ver; sessiz başarısızlıkla .part dosyalarını biriktirme.
+    if _selection_needs_ffmpeg(selection) and not _FFMPEG_AVAILABLE:
+        raise EngineError(
+            "ffmpeg bulunamadı. macOS: 'brew install ffmpeg', "
+            "Windows: 'winget install ffmpeg' ile kurun."
+        )
+    download_path = Path(download_dir)
     if title:
         safe_title = _sanitize_for_filename(title)
         outtmpl = f"{safe_title} [%(id)s] {selection}.%(ext)s"
     else:
         outtmpl = f"%(title)s [%(id)s] {selection}.%(ext)s"
+
+    # postprocessor_hooks ile merge sonrası nihai dosya yolunu yakala; bu yol
+    # progress_hook'taki "finished" event'inden daha güvenilirdir (merge
+    # tamamlandığında ateşlenir, video-only/audio-only ara dosyalardan sonra).
+    final_filename: dict[str, str] = {}
+
+    def _pp_hook(data: dict) -> None:
+        if data.get("status") == "finished":
+            info_dict = data.get("info_dict") or {}
+            filepath = info_dict.get("filepath") or info_dict.get("_filename")
+            if filepath:
+                final_filename["path"] = filepath
+
+    captured_info: dict = {}
+
+    def _wrapped_progress(data: dict) -> None:
+        # Son finished event'inde info_dict'i sakla; cleanup için id lazım.
+        if data.get("status") == "finished":
+            info = data.get("info_dict") or {}
+            if info.get("id"):
+                captured_info.update(info)
+            if data.get("filename"):
+                final_filename.setdefault("path", data["filename"])
+        if progress_hook is not None:
+            progress_hook(data)
+
     options: dict = {
         "format": build_format_selector(selection),
         "merge_output_format": "mp4",
-        "paths": {"home": str(download_dir)},
+        "paths": {"home": str(download_path)},
         # Kalite/format seçimi dosya adına yazılır: aynı videoyu farklı
         # kalitede indirince çakışma olmaz (yt-dlp "zaten indirilmiş" deyip
         # atlamaz). `selection` doğrulanmış, dosya-adı-güvenli bir dizedir.
@@ -304,7 +404,8 @@ def download(
         "quiet": True,
         "no_warnings": True,
         "noprogress": True,
-        "progress_hooks": [progress_hook] if progress_hook else [],
+        "progress_hooks": [_wrapped_progress],
+        "postprocessor_hooks": [_pp_hook],
     }
     if browser:
         options["cookiesfrombrowser"] = (browser,)
@@ -335,8 +436,24 @@ def download(
                 "--retry-wait=1",
             ],
         }
+
     try:
         with YoutubeDL(options) as ydl:
             ydl.download([url])
     except YoutubeDLError as exc:
+        _cleanup_artifacts(download_path, captured_info)
         raise EngineError(_clean_error(exc)) from exc
+
+    # yt-dlp exception fırlatmasa bile merge çökmüş olabilir — diskte nihai
+    # dosyanın gerçekten var olduğunu doğrula. Yoksa .part'lar geride kalır.
+    expected = final_filename.get("path")
+    if expected and not Path(expected).exists():
+        _cleanup_artifacts(download_path, captured_info)
+        raise EngineError(
+            "İndirme tamamlanamadı — ffmpeg birleştirmesi başarısız olmuş "
+            "olabilir. ffmpeg sürümünü kontrol edin."
+        )
+    if not expected:
+        # Hiçbir nihai yol yakalanmadıysa kuyruk tarafı yine de hata işaretler
+        # (queue_manager kontrolü); burada en azından artığı temizle.
+        _cleanup_artifacts(download_path, captured_info)

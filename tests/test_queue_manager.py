@@ -22,11 +22,16 @@ def _req(tmp_path, selection="best"):
 # --- sahte engine_download fonksiyonları ---------------------------------
 
 def _ok_download(*, url, selection, download_dir, browser, progress_hook, **_kwargs):
+    # download_dir altında gerçek bir dosya yarat ki queue_manager'ın yeni
+    # "diskte var mı" kontrolü geçsin.
+    from pathlib import Path
+    target = Path(download_dir) / "video.mp4"
+    target.write_bytes(b"x")
     progress_hook({"status": "downloading", "downloaded_bytes": 5,
                    "total_bytes": 10, "info_dict": {"title": "Test Başlık"}})
     progress_hook({"status": "downloading", "downloaded_bytes": 10,
                    "total_bytes": 10, "speed": 1048576, "eta": 0})
-    progress_hook({"status": "finished", "filename": "video.mp4"})
+    progress_hook({"status": "finished", "filename": str(target)})
 
 
 def _fail_download(*, url, selection, download_dir, browser, progress_hook, **_kwargs):
@@ -38,16 +43,21 @@ def _crash_download(*, url, selection, download_dir, browser, progress_hook, **_
 
 
 def _slow_download(*, url, selection, download_dir, browser, progress_hook, **_kwargs):
+    from pathlib import Path
+    target = Path(download_dir) / "video.mp4"
     for i in range(1, 300):
         progress_hook({"status": "downloading", "downloaded_bytes": i,
                        "total_bytes": 300})
         time.sleep(0.02)
-    progress_hook({"status": "finished", "filename": "video.mp4"})
+    target.write_bytes(b"x")
+    progress_hook({"status": "finished", "filename": str(target)})
 
 
 def _ytdlp_like_download(*, url, selection, download_dir, browser, progress_hook, **_kwargs):
     """Gerçek yt-dlp davranışını taklit eder: progress hook'tan fırlayan istisna
     yakalanıp EngineError'a sarmalanır (yt-dlp onu DownloadError'a sarmalar)."""
+    from pathlib import Path
+    target = Path(download_dir) / "video.mp4"
     try:
         for i in range(1, 300):
             progress_hook({"status": "downloading", "downloaded_bytes": i,
@@ -55,7 +65,8 @@ def _ytdlp_like_download(*, url, selection, download_dir, browser, progress_hook
             time.sleep(0.02)
     except Exception as exc:
         raise EngineError("indirme kesildi") from exc
-    progress_hook({"status": "finished", "filename": "video.mp4"})
+    target.write_bytes(b"x")
+    progress_hook({"status": "finished", "filename": str(target)})
 
 
 async def _wait_for(qm, job_id, status, timeout=4.0):
@@ -99,7 +110,35 @@ class TestWorker:
         job_id = qm.enqueue(_req(tmp_path))
         job = await _wait_for(qm, job_id, "completed")
         assert job.progress == 100.0
-        assert job.filename == "video.mp4"
+        assert job.filename.endswith("video.mp4")
+        await qm.stop()
+
+    async def test_completed_only_if_file_exists(self, tmp_path):
+        """yt-dlp exception fırlatmasa bile diskte dosya yoksa 'error'."""
+        def _phantom_download(*, url, selection, download_dir, browser,
+                              progress_hook, **_kwargs):
+            # Dosya yaratmadan finished yayınla (ffmpeg merge çökmüş senaryo)
+            progress_hook({"status": "finished",
+                           "filename": str(tmp_path / "yok.mp4")})
+        qm = QueueManager(engine_download=_phantom_download)
+        qm.start()
+        job_id = qm.enqueue(_req(tmp_path))
+        job = await _wait_for(qm, job_id, "error")
+        assert "bulunamadı" in (job.error or "")
+        await qm.stop()
+
+    async def test_completed_error_when_no_filename(self, tmp_path):
+        """progress hook hiç filename vermediyse 'error' işaretlenmeli."""
+        def _no_filename_download(*, url, selection, download_dir, browser,
+                                  progress_hook, **_kwargs):
+            # Hiç finished event'i yok → job.filename boş kalır
+            progress_hook({"status": "downloading", "downloaded_bytes": 5,
+                           "total_bytes": 10})
+        qm = QueueManager(engine_download=_no_filename_download)
+        qm.start()
+        job_id = qm.enqueue(_req(tmp_path))
+        job = await _wait_for(qm, job_id, "error")
+        assert job.error is not None
         await qm.stop()
 
     async def test_progress_and_metadata_updated(self, tmp_path):

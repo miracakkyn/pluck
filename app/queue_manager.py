@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable
+from pathlib import Path
 from uuid import uuid4
 
 from app import ytdlp_engine
@@ -186,6 +187,11 @@ class QueueManager:
         else:
             if job.cancel_requested:
                 job.status = "cancelled"
+            elif not job.filename or not Path(job.filename).exists():
+                # Engine exception fırlatmadı ama diskte dosya yok — ffmpeg
+                # merge sessizce çökmüş olabilir. "completed" yalanı verme.
+                job.status = "error"
+                job.error = "İndirme tamamlanamadı (dosya bulunamadı)"
             else:
                 job.status = "completed"
                 job.progress = 100.0

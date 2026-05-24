@@ -7,6 +7,12 @@ from yt_dlp.utils import DownloadError
 from app import ytdlp_engine
 from app.ytdlp_engine import EngineError, build_format_selector, list_formats
 
+
+@pytest.fixture(autouse=True)
+def _ffmpeg_present(monkeypatch):
+    """Test ortamında ffmpeg PATH'te olmayabilir; mock indirme yolu için sahte var."""
+    monkeypatch.setattr(ytdlp_engine, "_FFMPEG_AVAILABLE", True)
+
 FAKE_INFO = {
     "title": "Test Video",
     "duration": 120.0,
@@ -226,3 +232,109 @@ class TestDownload:
                 ytdlp_engine.download(
                     url="https://x/v", selection="best", download_dir=str(tmp_path),
                 )
+
+
+class TestFfmpegPrecheck:
+    def test_missing_ffmpeg_raises_for_video(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(ytdlp_engine, "_FFMPEG_AVAILABLE", False)
+        with pytest.raises(EngineError) as exc:
+            ytdlp_engine.download(
+                url="https://x/v", selection="best", download_dir=str(tmp_path),
+            )
+        assert "ffmpeg" in str(exc.value).lower()
+
+    def test_missing_ffmpeg_raises_for_audio(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(ytdlp_engine, "_FFMPEG_AVAILABLE", False)
+        with pytest.raises(EngineError):
+            ytdlp_engine.download(
+                url="https://x/v", selection="audio", download_dir=str(tmp_path),
+            )
+
+
+class TestPostDownloadVerification:
+    def test_missing_final_file_raises(self, tmp_path):
+        """yt-dlp exception fırlatmasa bile diskte dosya yoksa hata olmalı."""
+        ydl_class = MagicMock()
+        ctx = ydl_class.return_value.__enter__.return_value
+        # progress hook'tan filename yayınla ama disk'te dosya yarat ma
+        def fake_download(_urls):
+            opts = ydl_class.call_args[0][0]
+            for hook in opts["progress_hooks"]:
+                hook({"status": "finished",
+                      "filename": str(tmp_path / "yok.mp4"),
+                      "info_dict": {"id": "abc123"}})
+        ctx.download.side_effect = fake_download
+        with patch.object(ytdlp_engine, "YoutubeDL", ydl_class):
+            with pytest.raises(EngineError) as exc:
+                ytdlp_engine.download(
+                    url="https://x/v", selection="best",
+                    download_dir=str(tmp_path),
+                )
+        assert "tamamlanamadı" in str(exc.value).lower() or \
+               "tamamlanamadi" in str(exc.value).lower()
+
+    def test_existing_final_file_completes(self, tmp_path):
+        """Disk'te dosya varsa exception fırlatılmaz."""
+        target = tmp_path / "var.mp4"
+        target.write_bytes(b"x")
+        ydl_class = MagicMock()
+        ctx = ydl_class.return_value.__enter__.return_value
+        def fake_download(_urls):
+            opts = ydl_class.call_args[0][0]
+            for hook in opts["progress_hooks"]:
+                hook({"status": "finished", "filename": str(target),
+                      "info_dict": {"id": "abc123"}})
+        ctx.download.side_effect = fake_download
+        with patch.object(ytdlp_engine, "YoutubeDL", ydl_class):
+            ytdlp_engine.download(
+                url="https://x/v", selection="best",
+                download_dir=str(tmp_path),
+            )  # exception olmamalı
+
+
+class TestCleanupArtifacts:
+    def test_removes_part_files_with_matching_id(self, tmp_path):
+        keep_other = tmp_path / "baska_video [zzz999] best.mp4"
+        keep_done = tmp_path / "video [abc123] best.mp4"
+        part1 = tmp_path / "video [abc123] best.f137.mp4.part"
+        part2 = tmp_path / "video [abc123] best.f140.m4a.part"
+        ytdl_file = tmp_path / "video [abc123] best.ytdl"
+        for f in (keep_other, keep_done, part1, part2, ytdl_file):
+            f.write_bytes(b"x")
+        ytdlp_engine._cleanup_artifacts(tmp_path, {"id": "abc123"})
+        assert keep_other.exists()
+        assert keep_done.exists()
+        assert not part1.exists()
+        assert not part2.exists()
+        assert not ytdl_file.exists()
+
+    def test_no_id_is_noop(self, tmp_path):
+        part = tmp_path / "video [abc123] best.part"
+        part.write_bytes(b"x")
+        ytdlp_engine._cleanup_artifacts(tmp_path, {})
+        assert part.exists()  # bilinmiyor → dokunma
+
+    def test_missing_dir_silently_ignored(self, tmp_path):
+        from pathlib import Path
+        ytdlp_engine._cleanup_artifacts(Path(tmp_path / "yok"), {"id": "x"})
+
+
+class TestCleanError:
+    def test_preserves_multiline(self):
+        from app.ytdlp_engine import _clean_error
+        exc = Exception("ERROR: Sign in to confirm your age\n"
+                        "Use --cookies-from-browser or pass --cookies")
+        msg = _clean_error(exc)
+        assert "Sign in" in msg
+        assert "cookies" in msg  # 2. satır da korunmalı
+
+    def test_truncates_too_long(self):
+        from app.ytdlp_engine import _clean_error
+        long_msg = "x" * 1000
+        msg = _clean_error(Exception(long_msg))
+        assert len(msg) <= 501  # 500 + ellipsis
+        assert msg.endswith("…")
+
+    def test_empty_returns_default(self):
+        from app.ytdlp_engine import _clean_error
+        assert _clean_error(Exception("")) == "Bilinmeyen indirme hatası"
