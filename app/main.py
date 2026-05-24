@@ -26,8 +26,9 @@ logger = logging.getLogger("videoaraci")
 # Tek süreçli uygulama için modül seviyesinde tek kuyruk yöneticisi.
 queue_manager = QueueManager()
 
-# Klasör seçici durumu: pencere açık mı (pending) ve son seçilen yol (path).
-_picker_state: dict = {"pending": False, "path": None}
+# Klasör seçici durumu: pencere açık mı (pending), son seçilen yol (path),
+# ve son denemenin hata mesajı (error — varsa UI gösterir).
+_picker_state: dict = {"pending": False, "path": None, "error": None}
 
 
 @asynccontextmanager
@@ -128,27 +129,38 @@ async def get_events() -> StreamingResponse:
 async def _run_folder_picker() -> None:
     """Klasör seçme penceresini alt-process olarak açar; sonucu state'e yazar.
 
-    tkinter ayrı bir süreçte kendi ana thread'inde çalışır (Windows + macOS
-    uyumlu). Kullanıcı iptal ederse veya tkinter yoksa `path` None kalır.
+    Picker birden fazla backend dener (tkinter / osascript / zenity);
+    hepsi başarısızsa kullanıcıya UI'da gösterilebilir bir hata kaydeder.
     """
     try:
         proc = await asyncio.create_subprocess_exec(
             sys.executable, str(config.FOLDER_PICKER),
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
         )
-    except OSError:
-        logger.warning("Klasör seçici başlatılamadı")
+    except OSError as exc:
+        logger.warning("Klasör seçici başlatılamadı: %s", exc)
+        _picker_state["error"] = "Klasör seçici başlatılamadı"
         _picker_state["pending"] = False
         return
     try:
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=180)
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=180)
         chosen = stdout.decode("utf-8", errors="replace").strip()
         if chosen:
             _picker_state["path"] = chosen
+        elif proc.returncode != 0:
+            err_text = stderr.decode("utf-8", errors="replace").strip()
+            logger.warning("Klasör seçici başarısız (kod=%s): %s",
+                           proc.returncode, err_text)
+            _picker_state["error"] = (
+                "Klasör seçici açılamadı. macOS'ta tkinter eksikse "
+                "AppleScript denenir; izin reddedildiyse Sistem Ayarları → "
+                "Gizlilik ve Güvenlik → Otomasyon'u kontrol edin."
+            )
     except asyncio.TimeoutError:
         proc.kill()
         await proc.wait()
+        _picker_state["error"] = "Klasör seçici zaman aşımına uğradı"
     finally:
         _picker_state["pending"] = False
 
@@ -159,6 +171,7 @@ async def post_pick_folder() -> dict:
     if not _picker_state["pending"]:
         _picker_state["pending"] = True
         _picker_state["path"] = None
+        _picker_state["error"] = None
         asyncio.create_task(_run_folder_picker())
     return {"pending": True}
 

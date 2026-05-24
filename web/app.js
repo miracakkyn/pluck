@@ -133,8 +133,12 @@ async function pickFolder() {
   btn.textContent = "Pencere açık…";
   try {
     await api("POST", "/api/pick-folder");
-    const path = await waitForPickResult();
-    if (path) $("#download-dir").value = path;
+    const result = await waitForPickResult();
+    if (result?.path) {
+      $("#download-dir").value = result.path;
+    } else if (result?.error) {
+      showError($("#video-error"), result.error);
+    }
   } catch (err) {
     showError($("#video-error"), `Klasör seçilemedi: ${err.message}`);
   } finally {
@@ -143,13 +147,18 @@ async function pickFolder() {
   }
 }
 
-/** Klasör seçimi tamamlanana kadar durumu yoklar; seçilen yolu döndürür. */
+/**
+ * Klasör seçimi tamamlanana kadar durumu yoklar.
+ * @returns {Promise<{path: string|null, error: string|null}|null>}
+ */
 async function waitForPickResult(timeoutMs = 120000) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     await new Promise((resolve) => setTimeout(resolve, 600));
     const state = await api("GET", "/api/pick-folder");
-    if (!state.pending) return state.path;
+    if (!state.pending) {
+      return { path: state.path, error: state.error };
+    }
   }
   return null;
 }
