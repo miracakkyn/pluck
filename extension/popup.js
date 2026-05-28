@@ -93,13 +93,21 @@ function clearWarnings() { renderWarnings([]); }
 
 // --- motor iletişimi ----------------------------------------------------
 
-async function api(method, path, body) {
-  const opts = { method, headers: {} };
+async function api(method, path, body, timeoutMs = 120000) {
+  const opts = { method, headers: {}, signal: AbortSignal.timeout(timeoutMs) };
   if (body !== undefined) {
     opts.headers["Content-Type"] = "application/json";
     opts.body = JSON.stringify(body);
   }
-  const res = await fetch(helperBase + path, opts);
+  let res;
+  try {
+    res = await fetch(helperBase + path, opts);
+  } catch (err) {
+    if (err && err.name === "TimeoutError") {
+      throw new Error(`İstek zaman aşımına uğradı (${timeoutMs / 1000}sn).`);
+    }
+    throw new Error(err && err.message ? err.message : "Bağlantı hatası");
+  }
   const data = await res.json().catch(() => null);
   if (!res.ok) {
     throw new Error(data ? detailText(data.detail) : `Sunucu hatası (${res.status})`);
@@ -144,17 +152,6 @@ async function injectContentScript(tabId) {
   }
 }
 
-/** Background service worker'ın bu sekme için topladığı medya URL'lerini al. */
-async function getCollectedUrls(tabId) {
-  try {
-    const res = await chrome.runtime.sendMessage({
-      type: "GET_TAB_URLS", tabId,
-    });
-    return (res && Array.isArray(res.urls)) ? res.urls : [];
-  } catch {
-    return [];
-  }
-}
 
 // --- başlatma -----------------------------------------------------------
 
@@ -205,12 +202,30 @@ async function boot() {
   const tab = await getActiveTab();
   pageUrl = tab && tab.url ? tab.url : null;
   activeTabId = tab && typeof tab.id === "number" ? tab.id : null;
-  // Sayfaya content.js'i enjekte et — DOM tarama + overlay rozetler + ayrıca
-  // background'a medya URL'leri rapor edecek. Çağrı tamamlanması zorunlu
-  // değil; başarısızsa sadece backend'in HTML fetch'i yedeği kalır.
+  // Manifest content_scripts ile sayfaya otomatik inject olunur; yine de
+  // programatik inject yedek: eklenti güncellendiyse veya henüz inject
+  // olmadıysa hızlandırır. content.js idempotent (window.__pluckInjected).
   if (activeTabId !== null) injectContentScript(activeTabId);
+  await initBadgesToggle();
   startPolling();
   scanPage();
+}
+
+/** Sayfa-içi rozet aç/kapat anahtarını chrome.storage.local ile senkronize et.
+ *  Default: açık. Değişiklik content script'in onChanged listener'ına yansır. */
+async function initBadgesToggle() {
+  const cb = $("#badges-toggle");
+  try {
+    const data = await chrome.storage.local.get("badgesEnabled");
+    cb.checked = data.badgesEnabled !== false;  // varsayılan açık
+  } catch {
+    cb.checked = true;
+  }
+  cb.addEventListener("change", async () => {
+    try {
+      await chrome.storage.local.set({ badgesEnabled: cb.checked });
+    } catch { /* storage erişilemez — sessiz başarısızlık */ }
+  });
 }
 
 // --- sayfa tarama -------------------------------------------------------
@@ -235,54 +250,22 @@ async function scanPage() {
   $("#video-sub").textContent = pageUrl;
   try {
     const browser = $("#browser").value || null;
-    // Backend'in /api/formats çağrısı zaten sayfa HTML'sini regex'le tarıyor;
-    // ek olarak content script DOM + global player API + webRequest sniffer
-    // ile yakalanmış URL'leri /api/probe-urls'a yolla. İki yanıttan daha çok
-    // entry üretene güven (genelde probe-urls).
-    const [scan, probeScan] = await Promise.allSettled([
-      api("POST", "/api/formats", { url: pageUrl, browser }),
-      probeCollectedUrls(browser),
-    ]);
-    const formatsResult = scan.status === "fulfilled" ? scan.value : null;
-    const probeResult = probeScan.status === "fulfilled" ? probeScan.value : null;
-    const chosen = pickBetterScan(formatsResult, probeResult);
-    if (!chosen) {
-      const reason = scan.status === "rejected" ? scan.reason
-                    : probeScan.status === "rejected" ? probeScan.reason
-                    : new Error("Sayfada video bulunamadı");
-      throw reason;
-    }
-    currentScan = chosen;
-    if (chosen.type === "playlist") {
-      renderPlaylist(chosen);
+    // /api/formats Sprint 9 sayesinde sayfa regex'i + iframe + warnings ile
+    // generic extractor'ın atladıklarını da yakalıyor. Content script + web
+    // Request taraması overlay rozeti için kullanılır (background → /api/jobs).
+    const scan = await api("POST", "/api/formats", { url: pageUrl, browser });
+    currentScan = scan;
+    if (scan.type === "playlist") {
+      renderPlaylist(scan);
     } else {
-      renderVideo(chosen.video);
+      renderVideo(scan.video);
     }
-    renderWarnings(chosen.warnings || []);
+    renderWarnings(scan.warnings || []);
   } catch (err) {
     $("#video-title").textContent = "Video bulunamadı";
     $("#video-sub").textContent = "";
     showError(err.message || "Bilinmeyen hata");
   }
-}
-
-/** Content script + webRequest'ten toplanan URL'leri motora yollar.
- *  Hiç URL yoksa null döner (caller eski /api/formats sonucuna düşer). */
-async function probeCollectedUrls(browser) {
-  if (activeTabId === null) return null;
-  const urls = await getCollectedUrls(activeTabId);
-  if (!urls.length) return null;
-  return api("POST", "/api/probe-urls", { urls, referer: pageUrl, browser });
-}
-
-/** İki tarama sonucundan "daha iyiyi" seç: playlist'i tek videoya tercih et,
- *  iki playlist arasında daha çok entry'si olanı al. */
-function pickBetterScan(a, b) {
-  if (!a) return b;
-  if (!b) return a;
-  const sizeA = a.type === "playlist" ? (a.entries || []).length : 1;
-  const sizeB = b.type === "playlist" ? (b.entries || []).length : 1;
-  return sizeB > sizeA ? b : a;
 }
 
 function renderVideo(video) {

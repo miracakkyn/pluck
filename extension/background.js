@@ -102,18 +102,22 @@ async function findHelper() {
   return null;
 }
 
-async function downloadUrl(url) {
+const VALID_SELECTIONS = new Set(["best", "1080p", "720p", "480p", "audio"]);
+
+async function downloadUrl(url, selection) {
   const base = await findHelper();
   if (!base) {
     return { ok: false, error: "Pluck motoru bulunamadı (start.bat çalıştırın)" };
   }
+  // Güvenli yedek: tanımsız/uydurma değer gelirse "best"e düş.
+  const pickedSelection = VALID_SELECTIONS.has(selection) ? selection : "best";
   try {
     const res = await fetch(`${base}/api/jobs`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         url,
-        selection: "best",
+        selection: pickedSelection,
         download_dir: cachedHelperConfig.default_download_dir,
       }),
     });
@@ -146,7 +150,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
   // Content script overlay rozeti → "şu URL'yi indir"
   if (msg && msg.type === "DOWNLOAD_URL" && typeof msg.url === "string") {
-    downloadUrl(msg.url).then(sendResponse);
+    downloadUrl(msg.url, msg.selection).then(sendResponse);
     return true; // async response
   }
 });
