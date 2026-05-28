@@ -33,9 +33,34 @@
     { value: "audio", label: "Ses (MP3)" },
   ];
 
-  const badges = new Map(); // video element -> { host, badge, popover, ... }
+  const badges = new Map(); // hedef element -> { host, badge, popover, ... }
   const collectedUrls = new Set();
   let badgesEnabled = true; // varsayılan açık; storage'den okunup güncellenir
+
+  // Hangi iframe host'larının video oynatıcı olduğunu bildiğimiz liste.
+  // Bunlara rozet konur (kendi sayfa içlerinde <video> tag taranamasa bile).
+  const VIDEO_IFRAME_HOST_RE = new RegExp(
+    "(?:mediadelivery\\.net|b-cdn\\.net|bunnycdn\\.com|jwplayer\\.com|"
+    + "vimeo\\.com|player\\.vimeo|youtube\\.com/embed|youtube-nocookie\\.com|"
+    + "dailymotion\\.com/embed|wistia\\.net|hls\\.js|hlsplayer)",
+    "i",
+  );
+
+  // Player-benzeri container heuristic: <video>/<iframe> oluşturmayan
+  // custom JS player'lar (HLS.js + canvas, JWPlayer JS, vb.) için yedek.
+  // Class/id'sinde "player"/"video" geçen + en az 320x180 + ~16:9 olan div'ler.
+  const PLAYER_CONTAINER_SELECTORS = [
+    "[class*='player' i]",
+    "[id*='player' i]",
+    "[class*='video' i]",
+    "[id*='video' i]",
+    ".jwplayer",
+    ".video-js",
+    ".plyr",
+    ".hls-player",
+  ].join(",");
+  const MIN_CONTAINER_W = 320;
+  const MIN_CONTAINER_H = 180;
 
   // --- yardımcılar ------------------------------------------------------
 
@@ -92,8 +117,10 @@
 
   // --- rozet + popover ---------------------------------------------------
 
-  function buildBadge(video) {
-    if (badges.has(video)) return;
+  /** Hedef DOM element'i (video / iframe / div container) için rozet inşa eder.
+   *  Aynı element için tekrar çağrılırsa hiçbir şey yapmaz. */
+  function buildBadge(target) {
+    if (badges.has(target)) return;
     const host = document.createElement("div");
     host.style.cssText = [
       "all:initial",
@@ -121,8 +148,7 @@
     badge.appendChild(icon);
 
     const popover = document.createElement("div");
-    popover.className = "popover";
-    popover.hidden = true;
+    popover.className = "popover";  // .open eklenince görünür (overlay.css)
     const popTitle = document.createElement("div");
     popTitle.className = "pop-title";
     popTitle.textContent = "Kalite seç";
@@ -136,7 +162,7 @@
       opt.addEventListener("click", (ev) => {
         ev.preventDefault();
         ev.stopPropagation();
-        triggerDownload(video, entry, preset.value);
+        triggerDownload(target, entry, preset.value);
       });
       popover.appendChild(opt);
     }
@@ -152,8 +178,8 @@
     shadow.appendChild(wrap);
     document.documentElement.appendChild(host);
 
-    const entry = { host, badge, popover, video, popoverOpen: false };
-    badges.set(video, entry);
+    const entry = { host, badge, popover, target, popoverOpen: false };
+    badges.set(target, entry);
     positionBadge(entry);
   }
 
@@ -171,19 +197,19 @@
 
   function openPopover(entry) {
     entry.popoverOpen = true;
-    entry.popover.hidden = false;
+    entry.popover.classList.add("open");
     entry.badge.classList.add("open");
     positionBadge(entry);
   }
 
   function closePopover(entry) {
     entry.popoverOpen = false;
-    entry.popover.hidden = true;
+    entry.popover.classList.remove("open");
     entry.badge.classList.remove("open");
   }
 
   function positionBadge(entry) {
-    const rect = entry.video.getBoundingClientRect();
+    const rect = entry.target.getBoundingClientRect();
     const tooSmall = rect.width < MIN_VIDEO_W || rect.height < MIN_VIDEO_H;
     const offscreen = rect.bottom < 0 || rect.top > window.innerHeight
                       || rect.right < 0 || rect.left > window.innerWidth;
@@ -194,19 +220,17 @@
       return;
     }
     entry.host.style.visibility = "visible";
-    // Popover rozetin solunda açılır — sağdan ekran taşma riski az.
     const top = rect.top + BADGE_MARGIN;
     const left = rect.right - BADGE_SIZE - BADGE_MARGIN;
     entry.host.style.top = top + "px";
     entry.host.style.left = left + "px";
-    // Popover wrap içinde absolute; rozet sağa, popover sola hizalı.
   }
 
   function repositionAll() {
     for (const entry of badges.values()) {
-      if (!entry.video.isConnected) {
+      if (!entry.target.isConnected) {
         entry.host.remove();
-        badges.delete(entry.video);
+        badges.delete(entry.target);
         continue;
       }
       positionBadge(entry);
@@ -222,16 +246,23 @@
     });
   }
 
-  async function triggerDownload(video, entry, selection) {
+  async function triggerDownload(target, entry, selection) {
     closePopover(entry);
     entry.badge.classList.remove("err", "added");
     entry.badge.classList.add("busy");
     entry.badge.title = "İndiriliyor…";
     try {
-      const videoUrls = collectVideoSources(video);
-      // En öncelikli: currentSrc. Yoksa sayfa URL'si (yt-dlp ana sayfayı çözer).
-      const url = videoUrls.find((u) => /^https?:/i.test(u))
-                  || window.location.href;
+      // Hedef türüne göre URL stratejisi:
+      // - <video>: currentSrc / src / <source> öncelik
+      // - <iframe>: iframe.src (yt-dlp embed URL'ini çözer)
+      // - container div: sayfa URL'si (yt-dlp ana sayfayı çözer)
+      let url = null;
+      if (target.tagName === "VIDEO") {
+        url = collectVideoSources(target).find((u) => /^https?:/i.test(u));
+      } else if (target.tagName === "IFRAME" && target.src) {
+        url = target.src;
+      }
+      if (!url) url = window.location.href;
       const res = await chrome.runtime.sendMessage({
         type: "DOWNLOAD_URL",
         url,
@@ -292,10 +323,32 @@
   // --- ana döngü ----------------------------------------------------------
 
   function scanOnce() {
-    const videos = document.querySelectorAll("video");
-    for (const v of videos) {
+    // 1) <video> tag'leri — en güvenilir hedef.
+    for (const v of document.querySelectorAll("video")) {
       buildBadge(v);
       reportUrls(collectVideoSources(v));
+    }
+    // 2) Bilinen video iframe host'ları — Bunny Stream, Vimeo, YouTube embed
+    //    gibi içinde kendi <video> tag'ini render eden ama iframe sınırı
+    //    nedeniyle content script'in DOM'una giremediği oynatıcılar.
+    for (const f of document.querySelectorAll("iframe")) {
+      if (f.src && VIDEO_IFRAME_HOST_RE.test(f.src)) {
+        buildBadge(f);
+        reportUrls([f.src]);
+      }
+    }
+    // 3) Player-benzeri container heuristic — Ders-1 gibi <video>/<iframe>
+    //    oluşturmayan custom JS player'lar (HLS.js + canvas, JWPlayer JS) için
+    //    yedek. False positive azaltmak için: zaten <video>/<iframe> içerenler
+    //    atlanır; en az 320x180 + aspect ratio 1.0-2.8 (video gibi) olmalı.
+    for (const c of document.querySelectorAll(PLAYER_CONTAINER_SELECTORS)) {
+      if (badges.has(c)) continue;
+      if (c.querySelector("video, iframe")) continue;
+      const rect = c.getBoundingClientRect();
+      if (rect.width < MIN_CONTAINER_W || rect.height < MIN_CONTAINER_H) continue;
+      const ar = rect.width / rect.height;
+      if (ar < 1.0 || ar > 2.8) continue;
+      buildBadge(c);
     }
     reportUrls(collectGlobalPlayerUrls());
   }
@@ -310,12 +363,9 @@
   window.addEventListener("scroll", scheduleReposition, { passive: true });
   window.addEventListener("resize", scheduleReposition, { passive: true });
   // 2 sn periyodik: bazı player'lar src'i sonradan set ediyor (Bunny Stream),
-  // MutationObserver'ı tetiklemiyor.
+  // MutationObserver'ı tetiklemiyor. Tam tarama + repos hep birlikte.
   setInterval(() => {
+    scanOnce();
     repositionAll();
-    for (const v of document.querySelectorAll("video")) {
-      reportUrls(collectVideoSources(v));
-    }
-    reportUrls(collectGlobalPlayerUrls());
   }, 2000);
 })();
