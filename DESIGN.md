@@ -149,7 +149,8 @@ Tüm yanıtlar JSON. Hatalar `{ "detail": "<mesaj>" }` + uygun HTTP kodu.
 |---|---|---|---|
 | GET | `/` | — | index.html |
 | GET | `/api/config` | — | `{ default_download_dir, common_dirs[], browsers[] }` |
-| POST | `/api/formats` | `FormatsRequest` | `FormatsResponse` |
+| POST | `/api/formats` | `FormatsRequest` | `ScanResponse` (tek video veya playlist + warnings) |
+| POST | `/api/probe-urls` | `ProbeUrlsRequest { urls[], referer, browser? }` | `ScanResponse` (eklenti content script'inden gelen URL listesini yt-dlp ile çözer) |
 | POST | `/api/jobs` | `JobRequest` | `{ job_id }` |
 | GET | `/api/jobs` | — | `[Job, ...]` |
 | DELETE | `/api/jobs/{job_id}` | — | `{ job_id, status }` |
@@ -263,6 +264,15 @@ script'leri (venv bootstrap komutları).
   öngörülebilirliği için bilinçli tercih.
 - İş listesi bellekte tutulur; sunucu yeniden başlarsa kuyruk sıfırlanır
   (v1 kapsamı — kalıcılık yok).
+- **Çoklu video tespiti (Sprint 9):** yt-dlp'nin generic extractor'ı bazı
+  JS-tabanlı oynatıcılarda gömülü kaynakların yalnızca bir kısmını bulur.
+  `ytdlp_engine` `_VIDEO_URL_PATTERNS` regex listesiyle sayfayı tarar
+  (BunnyCDN broad + mediadelivery embed + generic .m3u8/.mpd/.mp4) ve
+  bilinen video iframe host'larına 1 derinlik girip içlerinde de regex
+  uygular. yt-dlp playlist branch'inde de bu tarama yapılır; eksikler
+  `_extract_each()` ile tek tek çözülüp `ScanResponse.warnings` alanına
+  başarısızlar bildirim olarak iliştirilir. URL dedupe host+path bazında
+  (`_url_dedup_key`) — yt-dlp'nin smuggle suffix'leri farkı maskelemez.
 
 ## 16. Tarayıcı eklentisi (Sprint 6 — hibrit mimari)
 
@@ -326,9 +336,78 @@ yerel araç için bu düşük önemde kabul edilir; ileride paylaşımlı bir je
 
 ### Kapsam dışı (v1 eklenti)
 
-- Sayfa ağ trafiğini dinleyerek gömülü/çoklu medya yakalama (`webRequest`) —
-  v1'de aktif sekme URL'si yt-dlp'ye verilir; yt-dlp videoyu kendisi bulur.
 - Eklenti mağazasına yayınlama — v1'de "paketlenmemiş yükle" ile kurulur.
+
+## 16.2 Content script + webRequest (Sprint 10)
+
+Sprint 6'daki popup-only eklenti mimarisi sayfanın JS-render ettiği veya
+backend HTML fetch'inin göremediği medya kaynaklarını yakalayamıyordu. Sprint
+10'da eklenti üç ek bileşenle genişletildi (manifest'e `content_scripts`
+yazılmadan, `activeTab` izni korunarak):
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ Sayfa (uzemykoabt.com vb.)                                   │
+│  <video>  <video>  <video>      ← her birine Shadow DOM     │
+│  [▼ Pluck][▼ Pluck][▼ Pluck]    rozet (IDM tarzı)           │
+│       │       │       │                                      │
+│       ▼ DOM tarama + global player API probe                 │
+│  content.js ─── chrome.runtime.sendMessage ──┐               │
+│                                              ▼               │
+│                              background.js (MV3 SW)          │
+│  webRequest.onResponseStarted ─ m3u8/mpd/mp4 sniff           │
+│  chrome.storage.session ile sekme bazında URL Map'i          │
+│                                              │               │
+│                                              ▼               │
+│  popup.js ── GET_TAB_URLS ────────────────────┘              │
+│  POST /api/probe-urls {urls[], referer, browser}             │
+│                                              │               │
+│                                              ▼               │
+│                               FastAPI motor (Sprint 9 endp.) │
+└─────────────────────────────────────────────────────────────┘
+```
+
+- **`content.js`** (`extension/content.js`): popup açıldığında
+  `chrome.scripting.executeScript({allFrames:true})` ile aktif sekmeye
+  enjekte edilir. Her `<video>` elementinin sağ-üstüne Shadow DOM içinde
+  küçük yarı şeffaf rozet (`overlay.css`) yerleştirir; rozete tıklayınca
+  background → yerel motor /api/jobs → kuyruğa indirme eklenir. Aynı zamanda
+  `<video>.currentSrc`, `<source>` ve global `window.jwplayer()` / `videojs`
+  API'lerinden URL toplar; `chrome.runtime.sendMessage({type:"DOM_URLS"})`
+  ile background'a yollar. `MutationObserver` + 2 sn'lik periyodik tarama
+  geç yüklenen player'ları yakalar.
+
+- **`background.js`** (`extension/background.js`): MV3 service worker.
+  `chrome.webRequest.onResponseStarted` ile (`xmlhttprequest`, `media`,
+  `other` türleri) sekmenin yaptığı tüm istekleri gözler; URL `.m3u8`,
+  `.mpd`, `.mp4`, `.m4s` ile bitiyorsa ilgili sekmeye yazar. Service worker
+  uykuda olabileceği için her ekleme `chrome.storage.session`'a yansıtılır
+  (chrome 102+). Rozet tıklandığında 8765–8770 port aralığında motoru bulup
+  `POST /api/jobs` ile (best preset + default klasör) indirme tetikler.
+
+- **`popup.js`** (mevcut, genişletildi): `boot()` içinde aktif sekmeye
+  content.js'i inject eder ve `GET_TAB_URLS` ile toplanmış URL'leri alır.
+  `scanPage()` artık `/api/formats` ile `/api/probe-urls`'i **paralel**
+  çağırır; daha çok girdi üretene güvenir (genelde probe-urls, çünkü DOM +
+  webRequest yt-dlp'nin atladıklarını yakalar). `warnings[]` alanı popup'ta
+  info banner olarak gösterilir.
+
+**İzinler** (manifest.json):
+- `activeTab` (mevcut) — kullanıcı eklentiye tıkladığında aktif sekme.
+- `scripting` — `chrome.scripting.executeScript` için (programatik inject).
+- `webRequest` — observation modunda, blocking yok (MV3 uyumlu).
+- `storage` — `chrome.storage.session` ile sekme URL kalıcılığı.
+- `host_permissions`: `["http://127.0.0.1/*", "<all_urls>"]` — motor +
+  webRequest tüm sayfaları görmek için.
+- `web_accessible_resources`: `overlay.css` (Shadow DOM'a yüklemek için).
+
+**Cross-origin iframe**: `allFrames: true` ile gömülü iframe'lere de
+injection denenir; `X-Frame-Options: DENY` durumlarında webRequest sniffer
+yedek olarak görür.
+
+**Gizlilik**: `content_scripts` manifest entry'si yok — kullanıcı eklentiye
+tıklamadığı sürece hiçbir sayfaya kod enjekte edilmez. `activeTab` izniyle
+kod sadece o anki sekme + alt iframe'lerinde çalışır.
 
 ## 17. Klasör seçici (native pencere)
 

@@ -56,8 +56,10 @@ kurulum/başlatma komutları olmalı; bunlar README'de ayrı belgelenir.
 - [x] Sprint 7 — Düzeltmeler (ses/kalite/login tarama) + native klasör seçici
 - [x] Sprint 8 — Çoklu video (playlist) + eklenti Firefox uyumu
 - [x] Sprint 5 — Login'li video testi (Firefox çerezi ile uzem doğrulandı)
+- [x] Sprint 9 — Çoklu video tespit iyileştirmesi (regex listesi + iframe ikinci-geçiş + warnings + /api/probe-urls)
+- [x] Sprint 10 — Eklenti content script + IDM tarzı sayfa-içi indir rozeti (programatik inject, webRequest sniffer, Shadow DOM overlay)
 
-Test: 83 test, %96 kapsam. Çalıştır: `.venv\Scripts\python.exe -m pytest`
+Test: 117 test, %96+ kapsam. Çalıştır: `.venv\Scripts\python.exe -m pytest`
 Uygulamayı çalıştır: `.venv\Scripts\python.exe run.py` (veya start.bat / start.command)
 Eklenti: `chrome://extensions` → Geliştirici modu → Paketlenmemiş yükle → `extension/`
 
