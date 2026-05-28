@@ -23,6 +23,7 @@ let pageUrl = null;
 let selection = "best";
 let pollTimer = null;
 let currentScan = null;  // son tarama yanıtı (tek video veya playlist)
+let activeTabId = null;  // chrome.scripting.executeScript için
 
 const $ = (sel) => document.querySelector(sel);
 const setHidden = (sel, hidden) => { $(sel).hidden = hidden; };
@@ -74,6 +75,22 @@ function clearError() {
   $("#error").hidden = true;
 }
 
+function renderWarnings(warnings) {
+  const box = $("#warnings");
+  box.replaceChildren();
+  if (!warnings || !warnings.length) {
+    box.hidden = true;
+    return;
+  }
+  for (const w of warnings) {
+    const li = document.createElement("li");
+    li.textContent = w;  // textContent — XSS yok
+    box.appendChild(li);
+  }
+  box.hidden = false;
+}
+function clearWarnings() { renderWarnings([]); }
+
 // --- motor iletişimi ----------------------------------------------------
 
 async function api(method, path, body) {
@@ -108,9 +125,35 @@ async function findHelper() {
   return null;
 }
 
-async function getActiveTabUrl() {
+async function getActiveTab() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  return tab && tab.url ? tab.url : null;
+  return tab || null;
+}
+
+/** Aktif sekmeye content script'i programatik enjekte eder (activeTab izniyle).
+ *  Hatayı yutar — chrome://, file:// gibi imtiyazlı sayfalarda izin yoktur. */
+async function injectContentScript(tabId) {
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId, allFrames: true },
+      files: ["content.js"],
+    });
+    return true;
+  } catch {
+    return false;  // imtiyazlı sayfa veya tarayıcı izni reddetti
+  }
+}
+
+/** Background service worker'ın bu sekme için topladığı medya URL'lerini al. */
+async function getCollectedUrls(tabId) {
+  try {
+    const res = await chrome.runtime.sendMessage({
+      type: "GET_TAB_URLS", tabId,
+    });
+    return (res && Array.isArray(res.urls)) ? res.urls : [];
+  } catch {
+    return [];
+  }
 }
 
 // --- başlatma -----------------------------------------------------------
@@ -159,7 +202,13 @@ async function boot() {
     $("#dirs").appendChild(opt);
   }
 
-  pageUrl = await getActiveTabUrl();
+  const tab = await getActiveTab();
+  pageUrl = tab && tab.url ? tab.url : null;
+  activeTabId = tab && typeof tab.id === "number" ? tab.id : null;
+  // Sayfaya content.js'i enjekte et — DOM tarama + overlay rozetler + ayrıca
+  // background'a medya URL'leri rapor edecek. Çağrı tamamlanması zorunlu
+  // değil; başarısızsa sadece backend'in HTML fetch'i yedeği kalır.
+  if (activeTabId !== null) injectContentScript(activeTabId);
   startPolling();
   scanPage();
 }
@@ -174,6 +223,7 @@ function hideAllModes() {
 
 async function scanPage() {
   clearError();
+  clearWarnings();
   hideAllModes();
   if (!pageUrl || !/^https?:/i.test(pageUrl)) {
     $("#video-title").textContent = "Bu sekmede video yok";
@@ -185,18 +235,54 @@ async function scanPage() {
   $("#video-sub").textContent = pageUrl;
   try {
     const browser = $("#browser").value || null;
-    const scan = await api("POST", "/api/formats", { url: pageUrl, browser });
-    currentScan = scan;
-    if (scan.type === "playlist") {
-      renderPlaylist(scan);
-    } else {
-      renderVideo(scan.video);
+    // Backend'in /api/formats çağrısı zaten sayfa HTML'sini regex'le tarıyor;
+    // ek olarak content script DOM + global player API + webRequest sniffer
+    // ile yakalanmış URL'leri /api/probe-urls'a yolla. İki yanıttan daha çok
+    // entry üretene güven (genelde probe-urls).
+    const [scan, probeScan] = await Promise.allSettled([
+      api("POST", "/api/formats", { url: pageUrl, browser }),
+      probeCollectedUrls(browser),
+    ]);
+    const formatsResult = scan.status === "fulfilled" ? scan.value : null;
+    const probeResult = probeScan.status === "fulfilled" ? probeScan.value : null;
+    const chosen = pickBetterScan(formatsResult, probeResult);
+    if (!chosen) {
+      const reason = scan.status === "rejected" ? scan.reason
+                    : probeScan.status === "rejected" ? probeScan.reason
+                    : new Error("Sayfada video bulunamadı");
+      throw reason;
     }
+    currentScan = chosen;
+    if (chosen.type === "playlist") {
+      renderPlaylist(chosen);
+    } else {
+      renderVideo(chosen.video);
+    }
+    renderWarnings(chosen.warnings || []);
   } catch (err) {
     $("#video-title").textContent = "Video bulunamadı";
     $("#video-sub").textContent = "";
-    showError(err.message);
+    showError(err.message || "Bilinmeyen hata");
   }
+}
+
+/** Content script + webRequest'ten toplanan URL'leri motora yollar.
+ *  Hiç URL yoksa null döner (caller eski /api/formats sonucuna düşer). */
+async function probeCollectedUrls(browser) {
+  if (activeTabId === null) return null;
+  const urls = await getCollectedUrls(activeTabId);
+  if (!urls.length) return null;
+  return api("POST", "/api/probe-urls", { urls, referer: pageUrl, browser });
+}
+
+/** İki tarama sonucundan "daha iyiyi" seç: playlist'i tek videoya tercih et,
+ *  iki playlist arasında daha çok entry'si olanı al. */
+function pickBetterScan(a, b) {
+  if (!a) return b;
+  if (!b) return a;
+  const sizeA = a.type === "playlist" ? (a.entries || []).length : 1;
+  const sizeB = b.type === "playlist" ? (b.entries || []).length : 1;
+  return sizeB > sizeA ? b : a;
 }
 
 function renderVideo(video) {
