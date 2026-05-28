@@ -319,6 +319,204 @@ class TestCleanupArtifacts:
         ytdlp_engine._cleanup_artifacts(Path(tmp_path / "yok"), {"id": "x"})
 
 
+class TestVideoUrlPatterns:
+    """Sprint 9: çoklu medya URL regex'lerinin saf davranışı."""
+
+    def test_bcdn_classic_playlist_m3u8(self):
+        html = 'src: "https://video.b-cdn.net/abc123def-456/playlist.m3u8"'
+        urls = ytdlp_engine._extract_urls_from_html(html)
+        assert urls == ["https://video.b-cdn.net/abc123def-456/playlist.m3u8"]
+
+    def test_bcdn_master_m3u8_with_query(self):
+        # Broad pattern: playlist.m3u8 olmayan + query'li yakalanmalı.
+        html = '"https://vz-1abc.b-cdn.net/aaaaaaaa-1111/master.m3u8?token=xyz"'
+        urls = ytdlp_engine._extract_urls_from_html(html)
+        assert any("master.m3u8" in u for u in urls)
+        assert any("token=xyz" in u for u in urls)
+
+    def test_mediadelivery_iframe_url(self):
+        # Bunny Stream embed URL'leri yt-dlp tarafından çözülebilir.
+        html = '<iframe src="https://iframe.mediadelivery.net/embed/12345/abc-def-1234"></iframe>'
+        urls = ytdlp_engine._extract_urls_from_html(html)
+        assert "https://iframe.mediadelivery.net/embed/12345/abc-def-1234" in urls
+
+    def test_generic_m3u8_fallback(self):
+        # BCDN/MediaDelivery dışı: generic m3u8 yedek pattern.
+        html = '<source src="https://cdn.other-host.com/path/stream.m3u8">'
+        urls = ytdlp_engine._extract_urls_from_html(html)
+        assert "https://cdn.other-host.com/path/stream.m3u8" in urls
+
+    def test_escaped_json_urls_normalized(self):
+        # JSON içindeki \/ kaçışlı URL'ler normalize edilmeli.
+        html = r'{"file":"https:\/\/cdn.b-cdn.net\/uuid-here\/playlist.m3u8"}'
+        urls = ytdlp_engine._extract_urls_from_html(html)
+        assert any("playlist.m3u8" in u for u in urls)
+
+    def test_dedupe_preserves_order(self):
+        html = (
+            "https://a.b-cdn.net/aaaa/playlist.m3u8 "
+            "https://a.b-cdn.net/aaaa/playlist.m3u8 "
+            "https://b.b-cdn.net/bbbb/playlist.m3u8"
+        )
+        urls = ytdlp_engine._extract_urls_from_html(html)
+        assert urls == [
+            "https://a.b-cdn.net/aaaa/playlist.m3u8",
+            "https://b.b-cdn.net/bbbb/playlist.m3u8",
+        ]
+
+    def test_multiple_distinct_videos(self):
+        # uzemykoabt benzeri senaryo: 3 ayrı m3u8, hepsi bulunmalı.
+        html = (
+            'd1:"https://vz1.b-cdn.net/aaaa-1111/playlist.m3u8" '
+            'd2:"https://vz1.b-cdn.net/bbbb-2222/playlist.m3u8" '
+            'd3:"https://vz1.b-cdn.net/cccc-3333/playlist.m3u8"'
+        )
+        urls = ytdlp_engine._extract_urls_from_html(html)
+        assert len(urls) == 3
+
+
+class TestExtractEach:
+    """Sprint 9: _extract_each warning toplama."""
+
+    def test_returns_tuple_of_entries_and_warnings(self):
+        ydl_class = _mock_ydl({**FAKE_INFO, "title": "OK"})
+        with patch.object(ytdlp_engine, "YoutubeDL", ydl_class):
+            entries, warnings = ytdlp_engine._extract_each(
+                ["https://x.b-cdn.net/u/playlist.m3u8"],
+                browser=None, referer="https://page",
+            )
+        assert len(entries) == 1
+        assert warnings == []
+
+    def test_failed_url_added_to_warnings(self):
+        # Hata fırlatan URL sessizce yutulmaz; warning'e dahil edilir.
+        ydl_class = MagicMock()
+        ctx = ydl_class.return_value.__enter__.return_value
+        ctx.extract_info.side_effect = DownloadError("ERROR: 403 forbidden")
+        with patch.object(ytdlp_engine, "YoutubeDL", ydl_class):
+            entries, warnings = ytdlp_engine._extract_each(
+                ["https://bad.b-cdn.net/u/playlist.m3u8"],
+                browser=None, referer="https://page",
+            )
+        assert entries == []
+        assert len(warnings) == 1
+        assert "Video 1 alınamadı" in warnings[0]
+        assert "403 forbidden" in warnings[0]
+
+    def test_mixed_success_and_failure(self):
+        # 3 URL: ilki ve sonuncusu başarılı, ortadaki hata.
+        ydl_class = MagicMock()
+        ctx = ydl_class.return_value.__enter__.return_value
+        ctx.extract_info.side_effect = [
+            {**FAKE_INFO, "title": "Video A"},
+            DownloadError("ERROR: missing"),
+            {**FAKE_INFO, "title": "Video C"},
+        ]
+        with patch.object(ytdlp_engine, "YoutubeDL", ydl_class):
+            entries, warnings = ytdlp_engine._extract_each(
+                ["https://a", "https://b", "https://c"],
+                browser=None, referer="https://page",
+            )
+        assert [e.title for e in entries] == ["Video A", "Video C"]
+        assert len(warnings) == 1
+        assert "Video 2 alınamadı" in warnings[0]
+
+
+class TestListFormatsScanIntegration:
+    """Sprint 9: list_formats generic + extra URL birleşimi."""
+
+    def test_merges_generic_with_extra_urls(self):
+        """Generic extractor'ın bulduğu URL feda edilmemeli — combined listeye dahil."""
+        # Senaryo: yt-dlp generic ilk videoyu (Ders-1) buluyor, sayfa
+        # regex'i Ders-2 + Ders-3 m3u8'lerini buluyor. Sonuçta entries=3 olmalı.
+        ders1_info = {
+            **FAKE_INFO,
+            "title": "Ders 1",
+            "webpage_url": "https://page.com/ders-1",
+        }
+        ders2_info = {**FAKE_INFO, "title": "Ders 2"}
+        ders3_info = {**FAKE_INFO, "title": "Ders 3"}
+
+        ydl_class = MagicMock()
+        ctx = ydl_class.return_value.__enter__.return_value
+        # 1. çağrı (list_formats ana extract) → Ders-1.
+        # _scan_page_for_video_urls: urlopen mock'lanmamış → exception → []
+        # _extract_each: combined=[ders-1-url] → tek URL → playlist'e geçmez
+        # Bu yüzden _scan_page_for_video_urls'i mock'lamamız gerek.
+        ctx.extract_info.side_effect = [
+            ders1_info,
+            ders2_info,
+            ders3_info,
+        ]
+        with patch.object(ytdlp_engine, "YoutubeDL", ydl_class), \
+             patch.object(
+                ytdlp_engine, "_scan_page_for_video_urls",
+                return_value=[
+                    "https://cdn.b-cdn.net/uuid2/playlist.m3u8",
+                    "https://cdn.b-cdn.net/uuid3/playlist.m3u8",
+                ],
+             ):
+            scan = list_formats("https://page.com/ders-1")
+        assert scan.type == "playlist"
+        assert scan.entries is not None
+        assert len(scan.entries) == 3
+        assert scan.entries[0].title == "Ders 1"
+        assert scan.entries[1].title == "Ders 2"
+        assert scan.entries[2].title == "Ders 3"
+        assert scan.warnings == []
+
+    def test_warnings_propagated_to_scan_response(self):
+        """_extract_each warning'leri ScanResponse.warnings'e taşınmalı."""
+        ydl_class = MagicMock()
+        ctx = ydl_class.return_value.__enter__.return_value
+        # 1. çağrı: list_formats ana extract (generic_entry için kullanılır,
+        #   tekrar fetch yok). 2. ve 3. çağrı: _extract_each iki extra URL —
+        #   biri hata, biri başarılı.
+        ctx.extract_info.side_effect = [
+            {**FAKE_INFO, "title": "Ders 1", "webpage_url": "https://p/d1"},
+            DownloadError("ERROR: token expired"),
+            {**FAKE_INFO, "title": "Ders 3"},
+        ]
+        with patch.object(ytdlp_engine, "YoutubeDL", ydl_class), \
+             patch.object(
+                ytdlp_engine, "_scan_page_for_video_urls",
+                return_value=[
+                    "https://cdn.b-cdn.net/uuid2/playlist.m3u8",
+                    "https://cdn.b-cdn.net/uuid3/playlist.m3u8",
+                ],
+             ):
+            scan = list_formats("https://p/d1")
+        assert scan.type == "playlist"
+        assert len(scan.entries) == 2  # generic + 1 başarılı extra
+        assert scan.entries[0].title == "Ders 1"
+        assert scan.entries[1].title == "Ders 3"
+        assert len(scan.warnings) == 1
+        assert "token expired" in scan.warnings[0]
+
+    def test_generic_url_dedup_when_in_extras(self):
+        """extra_urls içinde generic URL varsa tekrar fetch edilmemeli."""
+        # extra_urls listesi generic URL'yi içeriyor + 1 ek. _extract_each
+        # yalnızca 1 kez çağrılmalı (generic atlanır, sadece ek için).
+        ydl_class = MagicMock()
+        ctx = ydl_class.return_value.__enter__.return_value
+        ctx.extract_info.side_effect = [
+            {**FAKE_INFO, "title": "Generic", "webpage_url": "https://p/g"},
+            {**FAKE_INFO, "title": "Extra"},
+        ]
+        with patch.object(ytdlp_engine, "YoutubeDL", ydl_class), \
+             patch.object(
+                ytdlp_engine, "_scan_page_for_video_urls",
+                return_value=[
+                    "https://p/g",  # generic ile aynı — dedupe edilmeli
+                    "https://cdn.b-cdn.net/x/playlist.m3u8",
+                ],
+             ):
+            scan = list_formats("https://p/g")
+        assert scan.type == "playlist"
+        assert len(scan.entries) == 2
+        assert [e.title for e in scan.entries] == ["Generic", "Extra"]
+
+
 class TestCleanError:
     def test_preserves_multiline(self):
         from app.ytdlp_engine import _clean_error

@@ -11,6 +11,7 @@ import re
 import shutil
 from collections.abc import Callable
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from yt_dlp import YoutubeDL
 from yt_dlp.utils import YoutubeDLError
@@ -181,73 +182,202 @@ def list_formats(url: str, browser: str | None = None) -> ScanResponse:
 
     if info.get("_type") == "playlist":
         entries: list[FormatsResponse] = []
+        seen_keys: set[str] = set()
         for entry in info.get("entries") or []:
             if not entry:
                 continue
             parsed = _parse_info(entry)
             entry_url = (entry.get("webpage_url") or entry.get("original_url")
                          or entry.get("url"))
+            if entry_url:
+                seen_keys.add(_url_dedup_key(entry_url))
             entries.append(parsed.model_copy(update={"url": entry_url}))
+
+        # yt-dlp generic'in atladığı videoları regex taramasıyla yakala.
+        # JS-tabanlı oynatıcılarda yt-dlp bazı embed'leri kaçırabiliyor;
+        # _scan_page_for_video_urls iframe ve m3u8 desenlerini görür.
+        # Dedupe URL'i host+path bazında karşılaştırır — yt-dlp'nin URL'lere
+        # eklediği smuggle/fragment suffix'leri farkı maskelemez.
+        extra_urls = _scan_page_for_video_urls(url, browser)
+        missing_urls = [
+            u for u in extra_urls if _url_dedup_key(u) not in seen_keys
+        ]
+        warnings: list[str] = []
+        if missing_urls:
+            missing_entries, warnings = _extract_each(
+                missing_urls, browser, referer=url
+            )
+            entries.extend(missing_entries)
+
         if not entries:
             raise EngineError("Oynatma listesinde işlenebilir video bulunamadı")
         return ScanResponse(
             type="playlist",
             playlist_title=info.get("title") or "Oynatma listesi",
             entries=entries,
+            warnings=warnings,
         )
 
-    # Tek video çıktı — ama sayfa JS-tabanlı bir oynatıcı kullanıyor olabilir
-    # (videolar HTML iframe yerine JSON içinde gömülü). Sayfayı tarayıp
-    # gizli b-cdn.net m3u8 URL'leri bul; birden fazlaysa playlist gibi sun.
+    # Tek video çıktı — ama sayfa JS-tabanlı bir oynatıcı (JWPlayer, Bunny
+    # Stream, custom whiteboard player vb.) kullanıyor olabilir; içinde
+    # birden fazla bağımsız akış gömülü. Sayfayı (ve gerekirse gömülü video
+    # iframe'lerini) tarayıp tüm medya URL'lerini topla. Birden fazlaysa
+    # generic extractor'ın zaten çıkardığı info'yu ilk girdi olarak koy
+    # (yeniden fetch yapılmasın) ve geri kalanları _extract_each ile çöz.
     extra_urls = _scan_page_for_video_urls(url, browser)
     if len(extra_urls) > 1:
-        playlist_entries = _extract_each(extra_urls, browser, referer=url)
-        if len(playlist_entries) > 1:
+        generic_url = (
+            info.get("webpage_url") or info.get("original_url")
+            or info.get("url") or url
+        )
+        generic_key = _url_dedup_key(generic_url)
+        # Generic info'yu parsed entry olarak koru — feda etme.
+        generic_entry = _parse_info(info).model_copy(
+            update={"url": generic_url}
+        )
+        # extra_urls içinde generic ile aynı URL varsa tekrar extract etme.
+        unique_extras = [
+            u for u in extra_urls if _url_dedup_key(u) != generic_key
+        ]
+        extra_entries, warnings = _extract_each(
+            unique_extras, browser, referer=url
+        )
+        all_entries = [generic_entry, *extra_entries]
+        if len(all_entries) > 1:
             return ScanResponse(
                 type="playlist",
                 playlist_title=info.get("title") or "Oynatma listesi",
-                entries=playlist_entries,
+                entries=all_entries,
+                warnings=warnings,
             )
 
     return ScanResponse(type="video", video=_parse_info(info))
 
 
+def _url_dedup_key(url: str) -> str:
+    """URL'i host+path'e indirger — query/fragment/smuggle suffix'leri at.
+
+    yt-dlp bazı extractor'larında URL'e `#__youtubedl_smuggle=…` ekleyebilir;
+    aynı kaynağa giden iki URL string olarak farklı görünse de aynı videodur.
+    Dedupe için bu fonksiyonun anahtarı kullanılır.
+    """
+    try:
+        parts = urlsplit(url)
+        return f"{parts.scheme.lower()}://{parts.netloc.lower()}{parts.path}"
+    except ValueError:
+        return url
+
+
 # --- JS-tabanlı sayfalar için gizli video URL'i bulma ---------------------
 
-_BCDN_M3U8 = re.compile(
-    r"https://[a-z0-9.-]+\.b-cdn\.net/[a-f0-9-]+/playlist\.m3u8",
+# Regex listesi, sırayla denenir. Daha spesifik desenleri başa, generic'i sona
+# koy: spesifik host'lar (BCDN, MediaDelivery) önce yakalansın; generic
+# .m3u8/.mpd/.mp4 deseni yedek olarak çalışsın. `dict.fromkeys()` benzersizliği
+# korur, sıra anlamlıdır (ilk eşleşen pattern URL'yi listeye katar).
+_VIDEO_URL_PATTERNS: tuple[re.Pattern[str], ...] = (
+    # BunnyCDN broad: path/query esnek (playlist.m3u8 + master.m3u8 + ?token=…).
+    re.compile(
+        r"https://[a-z0-9.-]+\.b-cdn\.net/[a-f0-9-]+/"
+        r"[^\"'\s<>]*?\.m3u8(?:\?[^\"'\s<>]*)?",
+        re.IGNORECASE,
+    ),
+    # Bunny Stream MediaDelivery embed/play iframe URL'leri (her ders ayrı
+    # embed; yt-dlp bunları kendi extractor'ıyla çözebiliyor).
+    re.compile(
+        r"https://iframe\.mediadelivery\.net/(?:embed|play)/\d+/[a-f0-9-]+",
+        re.IGNORECASE,
+    ),
+    # Generic streaming/progressive — son çare yedek; aşağıdaki host whitelist
+    # ve uzantı kontrolü false positive'leri filtreler.
+    re.compile(
+        r"https?://[^\s\"'<>]+?\.(?:m3u8|mpd|mp4)(?:\?[^\s\"'<>]*)?",
+        re.IGNORECASE,
+    ),
+)
+
+# Sayfa içinde gömülü video iframe URL'leri — bilinen video host'larına gir,
+# rastgele iframe'lere değil (gizlilik + performans).
+_IFRAME_RE = re.compile(
+    r"""<iframe[^>]+src\s*=\s*['"]([^'"]+?"""
+    r"""(?:mediadelivery\.net|b-cdn\.net|bunnycdn\.com|jwplayer\.com)"""
+    r"""[^'"]*)['"]""",
     re.IGNORECASE,
 )
 
 
-def _scan_page_for_video_urls(page_url: str, browser: str | None) -> list[str]:
-    """Sayfayı çekip içindeki BunnyCDN m3u8 URL'lerini benzersiz olarak döndürür.
+def _extract_urls_from_html(html: str) -> list[str]:
+    """HTML metninden tanınan tüm medya URL desenlerini çıkarır.
 
-    JS-tabanlı oynatıcılar (uzemykoabt.com vb.) videoları HTML iframe yerine
+    JSON içindeki escape edilmiş URL'leri normalize eder (`\\/` → `/`).
+    Dedupe sırayı korur; spesifik pattern eşleşmeleri önce gelir.
+    """
+    normalized = html.replace("\\/", "/")
+    found: list[str] = []
+    for pattern in _VIDEO_URL_PATTERNS:
+        found.extend(pattern.findall(normalized))
+    return list(dict.fromkeys(found))
+
+
+def _scan_page_for_video_urls(page_url: str, browser: str | None) -> list[str]:
+    """Sayfayı (ve gömülü video iframe'lerini) çekip medya URL'lerini bulur.
+
+    JS-tabanlı oynatıcılar (uzemykoabt.com gibi) videoları HTML iframe veya
     JSON içinde gömüyor; yt-dlp'nin generic extractor'ı bunlardan yalnızca
-    birini bulabiliyor. Burada HTML'i regex ile tarıyoruz.
+    birini bulabiliyor. Strateji:
+
+    1. Ana sayfa HTML'ini fetch et, tüm pattern'lerle medya URL'lerini topla.
+    2. Bilinen video iframe host'larına gir (max 1 derinlik), içlerinde de
+       aynı taramayı tekrarla. Sonsuz döngü riskine karşı iç içe iframe
+       takip edilmez (derinlik=1).
+
+    Erişim hatası alınan kaynaklar sessizce atlanır — toplama best-effort.
     """
     options: dict = {"quiet": True, "no_warnings": True, "skip_download": True}
     if browser:
         options["cookiesfrombrowser"] = (browser,)
     try:
         with YoutubeDL(options) as ydl:
-            html = ydl.urlopen(page_url).read().decode("utf-8", errors="replace")
-        # JSON içindeki escape edilmiş URL'leri normalize et.
-        html = html.replace("\\/", "/")
-        return list(dict.fromkeys(_BCDN_M3U8.findall(html)))
+            main_html = ydl.urlopen(page_url).read().decode(
+                "utf-8", errors="replace"
+            )
+        all_urls = _extract_urls_from_html(main_html)
+        iframe_srcs = list(dict.fromkeys(_IFRAME_RE.findall(main_html)))
     except Exception:
+        # Sayfa fetch'i veya regex işlemi başarısız: best-effort tarama,
+        # boş dön; çağıran taraf generic extractor sonucunu kullanır.
         return []
+
+    # 2. geçiş: gömülü video iframe'lerini takip et (max 1 derinlik).
+    for iframe_src in iframe_srcs:
+        # MediaDelivery embed URL'sinin kendisi yt-dlp ile çözülebilir; onu
+        # bir indirilebilir aday olarak listeye al.
+        if iframe_src not in all_urls:
+            all_urls.append(iframe_src)
+        try:
+            with YoutubeDL(options) as ydl:
+                iframe_html = ydl.urlopen(iframe_src).read().decode(
+                    "utf-8", errors="replace"
+                )
+            iframe_urls = _extract_urls_from_html(iframe_html)
+        except Exception:
+            continue  # iframe erişilemez/işlenemez — diğerlerine devam
+        for found_url in iframe_urls:
+            if found_url not in all_urls:
+                all_urls.append(found_url)
+
+    return all_urls
 
 
 def _extract_each(
     video_urls: list[str],
     browser: str | None,
     referer: str,
-) -> list[FormatsResponse]:
-    """Her video URL'sini ayrı ayrı yt-dlp'ye verir; başarısızları atlar.
+) -> tuple[list[FormatsResponse], list[str]]:
+    """Her video URL'sini ayrı ayrı yt-dlp'ye verir; başarısızları topla.
 
     `referer` BunnyCDN'in m3u8 erişim kontrolü için gerekli (yoksa 403).
+    Dönüş `(entries, warnings)` — başarısız URL'ler sessizce yutulmaz;
+    `warnings` listesi UI'da kullanıcıya bildirim olarak gösterilir.
     """
     options: dict = {
         "quiet": True, "no_warnings": True, "skip_download": True,
@@ -256,6 +386,7 @@ def _extract_each(
     if browser:
         options["cookiesfrombrowser"] = (browser,)
     entries: list[FormatsResponse] = []
+    warnings: list[str] = []
     for idx, video_url in enumerate(video_urls):
         try:
             with YoutubeDL(options) as ydl:
@@ -268,9 +399,12 @@ def _extract_each(
                     entry_info["title"] = f"Video {idx + 1}"
                 parsed = _parse_info(entry_info)
                 entries.append(parsed.model_copy(update={"url": video_url}))
-        except YoutubeDLError:
+        except YoutubeDLError as exc:
+            warnings.append(
+                f"Video {idx + 1} alınamadı: {_clean_error(exc)}"
+            )
             continue
-    return entries
+    return entries, warnings
 
 
 _FILENAME_UNSAFE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')

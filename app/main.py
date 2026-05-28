@@ -17,7 +17,13 @@ from fastapi.staticfiles import StaticFiles
 
 from app import config, ytdlp_engine
 from app.events import event_stream
-from app.models import ConfigResponse, FormatsRequest, JobRequest, ScanResponse
+from app.models import (
+    ConfigResponse,
+    FormatsRequest,
+    JobRequest,
+    ProbeUrlsRequest,
+    ScanResponse,
+)
 from app.queue_manager import QueueManager
 from app.ytdlp_engine import EngineError
 
@@ -86,6 +92,37 @@ async def post_formats(req: FormatsRequest) -> ScanResponse:
         raise HTTPException(
             status_code=500, detail="Beklenmeyen bir hata oluştu"
         ) from exc
+
+
+@app.post("/api/probe-urls", response_model=ScanResponse)
+async def post_probe_urls(req: ProbeUrlsRequest) -> ScanResponse:
+    """Eklenti content script'inden gelen URL listesini doğrudan motora yollar.
+
+    Backend HTML regex'i göremediği JS-oluşturulan medya URL'lerini tarayıcı
+    DOM tarama + webRequest sniffing ile yakalar; bu uç o URL'leri yt-dlp ile
+    extract eder. Tek başarılı URL → `type="video"`, birden fazlası → playlist.
+    `referer` BunnyCDN gibi referer-koruyan CDN'ler için zorunlu.
+    """
+    try:
+        entries, warnings = await asyncio.to_thread(
+            ytdlp_engine._extract_each, req.urls, req.browser, req.referer,
+        )
+    except Exception as exc:  # _extract_each kendi hatalarını yutar, bu defansif
+        logger.exception("URL probe sırasında beklenmeyen hata")
+        raise HTTPException(
+            status_code=500, detail="Beklenmeyen bir hata oluştu"
+        ) from exc
+    if not entries:
+        detail = warnings[0] if warnings else "Verilen URL'lerden hiçbiri çözümlenemedi"
+        raise HTTPException(status_code=400, detail=detail)
+    if len(entries) == 1:
+        return ScanResponse(type="video", video=entries[0], warnings=warnings)
+    return ScanResponse(
+        type="playlist",
+        playlist_title="Sayfadaki videolar",
+        entries=entries,
+        warnings=warnings,
+    )
 
 
 @app.post("/api/jobs")

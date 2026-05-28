@@ -170,6 +170,86 @@ def test_pick_folder_post_starts_picker():
     main_module._picker_state["pending"] = False
 
 
+PROBE_ENTRY = FormatsResponse(
+    title="Probed Video",
+    duration=60.0,
+    thumbnail=None,
+    uploader=None,
+    formats=[FormatInfo(format_id="hls-720", ext="mp4",
+                        resolution="1280x720", height=720, kind="combined")],
+    presets=["best", "720p"],
+)
+
+
+def test_post_probe_urls_single_returns_video():
+    with patch("app.main.ytdlp_engine._extract_each",
+               return_value=([PROBE_ENTRY], [])):
+        resp = client.post("/api/probe-urls", json={
+            "urls": ["https://cdn.b-cdn.net/uuid/playlist.m3u8"],
+            "referer": "https://uzemykoabt.com/page/",
+        })
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["type"] == "video"
+    assert body["video"]["title"] == "Probed Video"
+    assert body["warnings"] == []
+
+
+def test_post_probe_urls_multiple_returns_playlist_with_warnings():
+    entry_a = PROBE_ENTRY.model_copy(update={"title": "Ders A"})
+    entry_b = PROBE_ENTRY.model_copy(update={"title": "Ders B"})
+    with patch("app.main.ytdlp_engine._extract_each",
+               return_value=([entry_a, entry_b], ["Video 3 alınamadı: 403"])):
+        resp = client.post("/api/probe-urls", json={
+            "urls": [
+                "https://cdn.b-cdn.net/u1/playlist.m3u8",
+                "https://cdn.b-cdn.net/u2/playlist.m3u8",
+                "https://cdn.b-cdn.net/u3/playlist.m3u8",
+            ],
+            "referer": "https://uzemykoabt.com/page/",
+        })
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["type"] == "playlist"
+    assert len(body["entries"]) == 2
+    assert body["warnings"] == ["Video 3 alınamadı: 403"]
+
+
+def test_post_probe_urls_all_fail_returns_400():
+    with patch("app.main.ytdlp_engine._extract_each",
+               return_value=([], ["Video 1 alınamadı: 403"])):
+        resp = client.post("/api/probe-urls", json={
+            "urls": ["https://cdn.b-cdn.net/u/playlist.m3u8"],
+            "referer": "https://page.com/",
+        })
+    assert resp.status_code == 400
+    assert "403" in resp.json()["detail"]
+
+
+def test_post_probe_urls_validates_url_scheme():
+    resp = client.post("/api/probe-urls", json={
+        "urls": ["javascript:alert(1)"],
+        "referer": "https://page.com/",
+    })
+    assert resp.status_code == 422
+
+
+def test_post_probe_urls_validates_loopback_blocked():
+    resp = client.post("/api/probe-urls", json={
+        "urls": ["http://127.0.0.1/secret.mp4"],
+        "referer": "https://page.com/",
+    })
+    assert resp.status_code == 422
+
+
+def test_post_probe_urls_rejects_empty_list():
+    resp = client.post("/api/probe-urls", json={
+        "urls": [],
+        "referer": "https://page.com/",
+    })
+    assert resp.status_code == 422
+
+
 def test_events_endpoint_is_sse():
     # Sonsuz akışı tüketmemek için event_stream sınırlı bir üreteçle değiştirilir.
     async def _finite(_get_snapshot):

@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Literal
 from urllib.parse import urlparse
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 from app import config
 
@@ -120,12 +120,44 @@ class ScanResponse(BaseModel):
 
     - `type="video"`  → `video` doludur, `entries` boş.
     - `type="playlist"` → `entries` doludur (her girdi tam format bilgisiyle).
+    - `warnings` çoklu video tarama sırasında çözümlenemeyen URL'ler için bilgi
+      satırları taşır (UI bunu kullanıcıya gösterir; sessiz başarısızlığı önler).
     """
 
     type: Literal["video", "playlist"]
     video: FormatsResponse | None = None
     playlist_title: str | None = None
     entries: list[FormatsResponse] | None = None
+    warnings: list[str] = Field(default_factory=list)
+
+
+class ProbeUrlsRequest(BaseModel):
+    """POST /api/probe-urls gövdesi.
+
+    Eklentinin content script'i sayfadan topladığı medya URL'lerini direkt
+    motora yollar. `referer` BunnyCDN gibi referer-koruyan CDN'ler için
+    gereklidir (yoksa 403). En fazla 20 URL — keyfi sayıda video yüklemekten
+    kaçınmak için pragmatik bir üst sınır.
+    """
+
+    urls: list[str] = Field(min_length=1, max_length=20)
+    referer: str
+    browser: str | None = None
+
+    @field_validator("urls")
+    @classmethod
+    def _check_urls(cls, value: list[str]) -> list[str]:
+        return [_validate_url(item) for item in value]
+
+    @field_validator("referer")
+    @classmethod
+    def _check_referer(cls, value: str) -> str:
+        return _validate_url(value)
+
+    @field_validator("browser")
+    @classmethod
+    def _check_browser(cls, value: str | None) -> str | None:
+        return _validate_browser(value)
 
 
 class ConfigResponse(BaseModel):
