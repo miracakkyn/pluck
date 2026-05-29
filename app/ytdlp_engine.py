@@ -84,7 +84,7 @@ def build_format_selector(selection: str) -> str:
 
 
 def _classify(vcodec: str | None, acodec: str | None) -> str | None:
-    """Format türünü belirler; geçersiz (her ikisi de yok) ise None."""
+    """Format türünü codec'lerden belirler; codec bilgisi yoksa None."""
     has_video = vcodec not in _NONE_VALUES
     has_audio = acodec not in _NONE_VALUES
     if has_video and has_audio:
@@ -96,13 +96,32 @@ def _classify(vcodec: str | None, acodec: str | None) -> str | None:
     return None
 
 
+def _infer_kind_without_codecs(raw: dict) -> str | None:
+    """Codec bildirilmemiş formatlar için türü boyut/bitrate'ten çıkarır.
+
+    HLS (m3u8) ana playlist'indeki varyant akışları çoğu zaman codec
+    bildirmez (`vcodec`/`acodec` = None) ama çözünürlük taşır. Bu akışlar
+    pratikte ses+video birleşik (muxed) olduğundan "combined" kabul edilir —
+    aksi halde tüm HLS formatları elenip kullanıcıya boş liste gösterilirdi
+    (BunnyCDN/MediaDelivery gibi sağlayıcılar). Boyut yoksa ama bitrate
+    varsa ses akışı kabul edilir.
+    """
+    if raw.get("height") or raw.get("width"):
+        return "combined"
+    if raw.get("abr") or raw.get("asr"):
+        return "audio"
+    return None
+
+
 def _parse_format(raw: dict) -> FormatInfo | None:
     """Tek bir yt-dlp format sözlüğünü FormatInfo'ya çevirir; elenecekse None."""
     ext = raw.get("ext") or ""
     if ext == "mhtml":  # storyboard
         return None
     kind = _classify(raw.get("vcodec"), raw.get("acodec"))
-    if kind is None:  # ne video ne ses
+    if kind is None:  # codec bilgisi yok — boyut/bitrate'ten çıkarmayı dene
+        kind = _infer_kind_without_codecs(raw)
+    if kind is None:  # ne video boyutu ne ses bitrate'i — gerçekten sınıflanamaz
         return None
     height = raw.get("height")
     width = raw.get("width")
@@ -470,6 +489,7 @@ def download(
     download_dir: str | Path,
     browser: str | None = None,
     title: str | None = None,
+    referer: str | None = None,
     progress_hook: Callable[[dict], None] | None = None,
 ) -> None:
     """Videoyu indirir ve gerekirse ffmpeg ile birleştirir (bloklayan).
@@ -478,6 +498,10 @@ def download(
     hook'un içeriden bir istisna fırlatmasıyla sağlanır (queue_manager).
     `title` verilirse dosya adının başında o kullanılır (jenerik m3u8
     "playlist" yerine "Video 1" gibi).
+    `referer` verilirse HTTP Referer başlığı olarak kullanılır — eklenti
+    rozeti, gömülü oynatıcının temiz embed URL'sini (smuggle eki olmadan)
+    gönderdiğinde, referer-koruyan CDN'lerin (BunnyCDN/MediaDelivery) 403
+    vermemesi için sayfa adresini referer olarak iletir.
 
     İndirme bittikten sonra dosyanın diskte gerçekten var olduğu doğrulanır;
     yoksa (ffmpeg merge sessizce başarısız olduysa) EngineError fırlatır.
@@ -543,9 +567,15 @@ def download(
     }
     if browser:
         options["cookiesfrombrowser"] = (browser,)
-    # BunnyCDN m3u8 URL'leri Referer header'i ister (yoksa 403). Generic bir
-    # mediadelivery refereri her zaman çalışır; başka sitelere zarar vermez.
-    if ".b-cdn.net/" in url and url.endswith(".m3u8"):
+    # Referer önceliği:
+    # 1) Çağıranın verdiği `referer` (eklenti rozeti → sayfa adresi). Embed
+    #    oynatıcılar (MediaDelivery vb.) genelde gömüldükleri sayfayı referer
+    #    olarak ister; temiz embed URL'sinde smuggle eki olmadığında bu gerekir.
+    # 2) Aksi halde, doğrudan BunnyCDN m3u8 URL'leri için generic mediadelivery
+    #    refereri (yoksa 403).
+    if referer:
+        options["http_headers"] = {"Referer": referer}
+    elif ".b-cdn.net/" in url and url.endswith(".m3u8"):
         options["http_headers"] = {"Referer": "https://iframe.mediadelivery.net/"}
     if selection == "audio":
         options["postprocessors"] = [

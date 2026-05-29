@@ -80,6 +80,7 @@ class QueueManager:
             browser=request.browser,
             title=request.title or "",
             title_locked=bool(request.title),
+            referer=request.referer,
         )
         self._pending.put_nowait(job_id)
         return job_id
@@ -167,6 +168,7 @@ class QueueManager:
                 download_dir=job.download_dir,
                 browser=job.browser,
                 title=job.title if job.title_locked else None,
+                referer=job.referer,
                 progress_hook=self._make_progress_hook(job),
             )
         except _Cancelled:

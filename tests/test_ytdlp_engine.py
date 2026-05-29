@@ -233,6 +233,41 @@ class TestDownload:
                     url="https://x/v", selection="best", download_dir=str(tmp_path),
                 )
 
+    def test_explicit_referer_sets_header(self, tmp_path):
+        # Eklenti rozeti temiz embed URL + sayfa referer'ı gönderir.
+        ydl_class = _mock_ydl()
+        with patch.object(ytdlp_engine, "YoutubeDL", ydl_class):
+            ytdlp_engine.download(
+                url="https://iframe.mediadelivery.net/embed/1/abc",
+                selection="best", download_dir=str(tmp_path),
+                referer="https://uzemykoabt.com/sayfa/",
+            )
+        headers = ydl_class.call_args[0][0].get("http_headers") or {}
+        assert headers.get("Referer") == "https://uzemykoabt.com/sayfa/"
+
+    def test_referer_overrides_bcdn_default(self, tmp_path):
+        # Açık referer verildiğinde b-cdn varsayılanı ezilir.
+        ydl_class = _mock_ydl()
+        with patch.object(ytdlp_engine, "YoutubeDL", ydl_class):
+            ytdlp_engine.download(
+                url="https://vz.b-cdn.net/u/playlist.m3u8",
+                selection="best", download_dir=str(tmp_path),
+                referer="https://page.example/",
+            )
+        headers = ydl_class.call_args[0][0].get("http_headers") or {}
+        assert headers.get("Referer") == "https://page.example/"
+
+    def test_bcdn_default_referer_when_none_given(self, tmp_path):
+        # referer yoksa doğrudan b-cdn m3u8 için mediadelivery referer'ı.
+        ydl_class = _mock_ydl()
+        with patch.object(ytdlp_engine, "YoutubeDL", ydl_class):
+            ytdlp_engine.download(
+                url="https://vz.b-cdn.net/u/playlist.m3u8",
+                selection="best", download_dir=str(tmp_path),
+            )
+        headers = ydl_class.call_args[0][0].get("http_headers") or {}
+        assert headers.get("Referer") == "https://iframe.mediadelivery.net/"
+
 
 class TestFfmpegPrecheck:
     def test_missing_ffmpeg_raises_for_video(self, tmp_path, monkeypatch):
@@ -317,6 +352,69 @@ class TestCleanupArtifacts:
     def test_missing_dir_silently_ignored(self, tmp_path):
         from pathlib import Path
         ytdlp_engine._cleanup_artifacts(Path(tmp_path / "yok"), {"id": "x"})
+
+
+class TestUnknownCodecFormats:
+    """HLS m3u8 varyantları codec bildirmez; yine de listelenmeli."""
+
+    def test_hls_variant_without_codecs_is_combined(self):
+        # vcodec/acodec None ama çözünürlük var → muxed video (combined).
+        info = {"title": "HLS", "formats": [
+            {"format_id": "2800", "ext": "mp4", "vcodec": None,
+             "acodec": None, "resolution": "1280x720", "height": 720},
+        ]}
+        with patch.object(ytdlp_engine, "YoutubeDL", _mock_ydl(info)):
+            resp = list_formats("https://x/v").video
+        assert len(resp.formats) == 1
+        assert resp.formats[0].kind == "combined"
+        assert resp.formats[0].format_id == "2800"
+
+    def test_multiple_hls_variants_all_listed(self):
+        # BunnyCDN tarzı 5 çözünürlük — hepsi listelenmeli (eskiden hepsi elenirdi).
+        info = {"title": "Ders 1", "formats": [
+            {"format_id": str(br), "ext": "mp4", "vcodec": None, "acodec": None,
+             "resolution": res, "height": h}
+            for br, res, h in [
+                ("600", "352x240", 240), ("800", "640x360", 360),
+                ("1400", "842x480", 480), ("2800", "1280x720", 720),
+                ("5000", "1920x1080", 1080),
+            ]
+        ]}
+        with patch.object(ytdlp_engine, "YoutubeDL", _mock_ydl(info)):
+            resp = list_formats("https://x/v").video
+        assert len(resp.formats) == 5
+        assert all(f.kind == "combined" for f in resp.formats)
+        # En yüksek çözünürlük başta (sort).
+        assert resp.formats[0].height == 1080
+
+    def test_audio_only_without_codecs_inferred_from_bitrate(self):
+        info = {"title": "A", "formats": [
+            {"format_id": "audio-0", "ext": "m4a", "vcodec": None,
+             "acodec": None, "abr": 128},  # boyut yok ama bitrate var → audio
+        ]}
+        with patch.object(ytdlp_engine, "YoutubeDL", _mock_ydl(info)):
+            resp = list_formats("https://x/v").video
+        assert len(resp.formats) == 1
+        assert resp.formats[0].kind == "audio"
+
+    def test_truly_unclassifiable_format_dropped(self):
+        # Ne codec, ne boyut, ne bitrate → elenmeli (eski davranış korunur).
+        info = {"title": "X", "formats": [
+            {"format_id": "junk", "ext": "mp4", "vcodec": None, "acodec": None},
+            {"format_id": "ok", "ext": "mp4", "vcodec": "avc1",
+             "acodec": "mp4a", "height": 360, "resolution": "640x360"},
+        ]}
+        with patch.object(ytdlp_engine, "YoutubeDL", _mock_ydl(info)):
+            resp = list_formats("https://x/v").video
+        ids = {f.format_id for f in resp.formats}
+        assert ids == {"ok"}  # junk elenir
+
+    def test_explicit_codecs_still_classified_normally(self):
+        # codec açıkça bildirilmişse inference devreye girmez.
+        from app.ytdlp_engine import _classify
+        assert _classify("avc1", "mp4a") == "combined"
+        assert _classify("avc1", "none") == "video"
+        assert _classify("none", "mp4a") == "audio"
 
 
 class TestVideoUrlPatterns:

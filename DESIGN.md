@@ -273,6 +273,19 @@ script'leri (venv bootstrap komutları).
   `_extract_each()` ile tek tek çözülüp `ScanResponse.warnings` alanına
   başarısızlar bildirim olarak iliştirilir. URL dedupe host+path bazında
   (`_url_dedup_key`) — yt-dlp'nin smuggle suffix'leri farkı maskelemez.
+- **HLS codec bildirimi (Sprint 12):** HLS (m3u8) ana playlist varyantları
+  çoğu sağlayıcıda (BunnyCDN/MediaDelivery) `vcodec`/`acodec` bildirmez.
+  `_parse_format` codec yoksa `_infer_kind_without_codecs` ile boyut/bitrate'ten
+  tür çıkarır (çözünürlük varsa "combined"); aksi halde tüm HLS formatları
+  elenip kullanıcıya boş liste gösterilirdi. yt-dlp'nin kendi seçicisi
+  bağımsızdır; bu yalnızca UI'da çözünürlük listesini doldurur.
+- **Referer ile embed indirme (Sprint 12):** Eklenti rozeti, gömülü oynatıcının
+  *temiz* embed URL'sini (smuggle eki olmadan) gönderir. `JobRequest.referer`
+  (→ `download(referer=…)`) verilirse HTTP Referer olarak iletilir; referer-koruyan
+  CDN'ler (BunnyCDN/MediaDelivery) 403 vermez. Referer de `_validate_url`
+  doğrulamasından geçer (loopback/şema reddi). Rozet ayrıca çerez tarayıcısını
+  (popup ile aynı; `storage.local.cookieBrowser`) gönderir — login'li embed'ler
+  için gerekli.
 
 ## 16. Tarayıcı eklentisi (Sprint 6 — hibrit mimari)
 

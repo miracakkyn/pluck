@@ -182,17 +182,34 @@ async function boot() {
   } catch {
     /* önemsiz — varsayılan klasör kullanılır */
   }
+  // boot() retry ile yeniden çağrılabilir; statik ilk option ("Çerez yok")
+  // dışındaki dinamik tarayıcı option'larını temizle (çoğalmayı önle).
+  const browserSel = $("#browser");
+  while (browserSel.options.length > 1) browserSel.remove(1);
   for (const name of appConfig.browsers) {
     const opt = document.createElement("option");
     opt.value = name;
     opt.textContent = name.charAt(0).toUpperCase() + name.slice(1);
-    $("#browser").appendChild(opt);
+    browserSel.appendChild(opt);
   }
   // Varsayılan çerez: firefox (Firefox açıkken bile çerez okunabilir; en
   // güvenilir seçenek). Kullanıcı isterse değiştirebilir.
   if (appConfig.browsers.includes("firefox")) {
     $("#browser").value = "firefox";
   }
+  // Daha önce seçilen tarayıcıyı geri yükle (varsa) ve rozet indirmesinin de
+  // kullanması için storage'a yansıt. Böylece sayfa-içi rozet ile popup aynı
+  // çerez tarayıcısını kullanır.
+  try {
+    const saved = await chrome.storage.local.get("cookieBrowser");
+    if (typeof saved.cookieBrowser === "string"
+        && appConfig.browsers.includes(saved.cookieBrowser)) {
+      $("#browser").value = saved.cookieBrowser;
+    }
+  } catch { /* storage erişilemez — varsayılan kalır */ }
+  persistCookieBrowser();
+  // datalist: retry'de çoğalmasın diye önce temizle (statik çocuğu yok).
+  $("#dirs").replaceChildren();
   for (const dir of appConfig.common_dirs) {
     const opt = document.createElement("option");
     opt.value = dir;
@@ -209,6 +226,14 @@ async function boot() {
   await initBadgesToggle();
   startPolling();
   scanPage();
+}
+
+/** Seçili çerez tarayıcısını storage'a yazar — background rozet indirmesinde
+ *  aynı tarayıcının çerezlerini kullanır (popup ile tutarlılık). */
+function persistCookieBrowser() {
+  try {
+    chrome.storage.local.set({ cookieBrowser: $("#browser").value || "" });
+  } catch { /* storage erişilemez — sessiz */ }
 }
 
 /** Sayfa-içi rozet aç/kapat anahtarını chrome.storage.local ile senkronize et.
@@ -568,5 +593,11 @@ $("#download-btn").addEventListener("click", startDownload);
 $("#download-all-btn").addEventListener("click", downloadAllEntries);
 $("#browse-btn").addEventListener("click", pickFolder);
 $("#clear-queue-btn").addEventListener("click", clearFinishedJobs);
+// Çerez tarayıcısı değişince: tercihi sakla (rozet de kullanır) ve yeniden
+// tara. Statik bağlama — boot() yeniden çağrılsa bile çift bağlanmaz.
+$("#browser").addEventListener("change", () => {
+  persistCookieBrowser();
+  if (helperBase) scanPage();
+});
 
 boot();

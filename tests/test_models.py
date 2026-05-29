@@ -32,6 +32,19 @@ class TestFormatsRequest:
         with pytest.raises(ValidationError):
             FormatsRequest(url="http://169.254.169.254/latest/meta-data/")
 
+    def test_crlf_in_url_rejected(self):
+        # HTTP header injection savunması — ortadaki CR/LF reddedilmeli.
+        with pytest.raises(ValidationError):
+            FormatsRequest(url="https://example.com/\r\nX-Injected: evil")
+
+    def test_newline_in_url_rejected(self):
+        with pytest.raises(ValidationError):
+            FormatsRequest(url="https://example.com/\npath")
+
+    def test_tab_control_char_rejected(self):
+        with pytest.raises(ValidationError):
+            FormatsRequest(url="https://example.com/\tpath")
+
     def test_lan_ip_allowed(self):
         # RFC 1918 LAN medya sunucuları bilinçli olarak engellenmez.
         assert FormatsRequest(url="http://192.168.1.50/video.mp4").url
@@ -93,6 +106,35 @@ class TestJobRequest:
                 url="https://example.com/v", selection="bad; rm -rf",
                 download_dir=str(tmp_path),
             )
+
+    def test_referer_optional_default_none(self, tmp_path):
+        req = JobRequest(url="https://example.com/v", selection="best",
+                         download_dir=str(tmp_path))
+        assert req.referer is None
+
+    def test_referer_accepted(self, tmp_path):
+        req = JobRequest(url="https://cdn.example/v.m3u8", selection="best",
+                         download_dir=str(tmp_path),
+                         referer="https://uzemykoabt.com/sayfa/")
+        assert req.referer == "https://uzemykoabt.com/sayfa/"
+
+    def test_blank_referer_becomes_none(self, tmp_path):
+        req = JobRequest(url="https://example.com/v", selection="best",
+                         download_dir=str(tmp_path), referer="  ")
+        assert req.referer is None
+
+    def test_invalid_referer_rejected(self, tmp_path):
+        # Referer de URL doğrulamasından geçer (loopback/şema reddi).
+        with pytest.raises(ValidationError):
+            JobRequest(url="https://example.com/v", selection="best",
+                       download_dir=str(tmp_path), referer="javascript:alert(1)")
+
+    def test_referer_crlf_header_injection_rejected(self, tmp_path):
+        # Referer http_headers'a girdiği için CRLF injection özellikle tehlikeli.
+        with pytest.raises(ValidationError):
+            JobRequest(url="https://example.com/v", selection="best",
+                       download_dir=str(tmp_path),
+                       referer="https://ok.com/\r\nX-Evil: 1")
 
 
 class TestJob:

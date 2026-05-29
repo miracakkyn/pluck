@@ -35,6 +35,12 @@ def _validate_url(value: str) -> str:
     cleaned = value.strip()
     if not cleaned:
         raise ValueError("URL boş olamaz")
+    # Kontrol karakterleri (CR/LF/TAB vb.) HTTP header injection'a yol açar:
+    # `referer`/`url` yt-dlp'nin http_headers sözlüğüne ve isteğine girer; aradaki
+    # bir "\r\n" yeni bir header satırı enjekte edebilir. .strip() yalnızca
+    # baş/sonu temizler — ortadaki kontrol karakterlerini burada reddet.
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7f for ch in cleaned):
+        raise ValueError("URL kontrol karakteri içeremez")
     if not (cleaned.startswith("http://") or cleaned.startswith("https://")):
         raise ValueError("URL http:// veya https:// ile başlamalı")
 
@@ -182,10 +188,18 @@ class JobRequest(BaseModel):
     download_dir: str
     browser: str | None = None
     title: str | None = None
+    referer: str | None = None  # embed oynatıcılar için sayfa adresi (eklenti rozeti)
 
     @field_validator("url")
     @classmethod
     def _check_url(cls, value: str) -> str:
+        return _validate_url(value)
+
+    @field_validator("referer")
+    @classmethod
+    def _check_referer(cls, value: str | None) -> str | None:
+        if value is None or not value.strip():
+            return None
         return _validate_url(value)
 
     @field_validator("selection")
@@ -226,6 +240,7 @@ class Job:
     download_dir: str
     browser: str | None = None
     title: str = ""
+    referer: str | None = None  # embed oynatıcı indirmelerinde Referer başlığı
     status: JobStatus = "queued"
     progress: float = 0.0          # 0–100
     speed: str | None = None       # insan-okur, ör. "1.2MiB/s"

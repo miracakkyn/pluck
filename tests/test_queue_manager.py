@@ -93,6 +93,30 @@ class TestEnqueue:
         assert job is not None
         assert job.status == "queued"
 
+    async def test_referer_passed_to_engine(self, tmp_path):
+        """JobRequest.referer → Job → download(referer=...) zinciri."""
+        captured = {}
+
+        def _capture(*, url, selection, download_dir, browser,
+                     progress_hook, **kwargs):
+            captured["referer"] = kwargs.get("referer")
+            from pathlib import Path
+            target = Path(download_dir) / "video.mp4"
+            target.write_bytes(b"x")
+            progress_hook({"status": "finished", "filename": str(target)})
+
+        qm = QueueManager(engine_download=_capture)
+        qm.start()
+        req = JobRequest(
+            url="https://iframe.mediadelivery.net/embed/1/abc",
+            selection="best", download_dir=str(tmp_path),
+            referer="https://uzemykoabt.com/sayfa/",
+        )
+        job_id = qm.enqueue(req)
+        await _wait_for(qm, job_id, "completed")
+        assert captured["referer"] == "https://uzemykoabt.com/sayfa/"
+        await qm.stop()
+
     def test_job_appears_in_listing(self, tmp_path):
         qm = QueueManager(engine_download=_ok_download)
         job_id = qm.enqueue(_req(tmp_path))

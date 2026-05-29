@@ -58,8 +58,10 @@ kurulum/başlatma komutları olmalı; bunlar README'de ayrı belgelenir.
 - [x] Sprint 5 — Login'li video testi (Firefox çerezi ile uzem doğrulandı)
 - [x] Sprint 9 — Çoklu video tespit iyileştirmesi (regex listesi + iframe ikinci-geçiş + warnings + /api/probe-urls)
 - [x] Sprint 10 — Eklenti content script + IDM tarzı sayfa-içi indir rozeti (programatik inject, webRequest sniffer, Shadow DOM overlay)
+- [x] Sprint 11 — Otomatik tarama + rozet toggle + kalite seçim menüsü; popover hidden fix; iframe/player-container rozet (Ders-1)
+- [x] Sprint 12 — HLS codec=None formatlarını listele (_infer_kind_without_codecs); rozet indirmesine çerez+referer (login'li embed'ler); JobRequest.referer zinciri
 
-Test: 117 test, %96+ kapsam. Çalıştır: `.venv\Scripts\python.exe -m pytest`
+Test: 130 test, %96+ kapsam. Çalıştır: `.venv\Scripts\python.exe -m pytest`
 Uygulamayı çalıştır: `.venv\Scripts\python.exe run.py` (veya start.bat / start.command)
 Eklenti: `chrome://extensions` → Geliştirici modu → Paketlenmemiş yükle → `extension/`
 
