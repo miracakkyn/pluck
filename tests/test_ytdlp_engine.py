@@ -61,6 +61,15 @@ class TestBuildFormatSelector:
         assert f"height<={height}" in sel
         assert "ext=mp4" in sel  # uyumlu mp4 tercihi
 
+    @pytest.mark.parametrize("preset", ["1080p", "720p", "480p"])
+    def test_resolution_presets_have_unconstrained_fallback(self, preset):
+        # İstenen yükseklik mevcut değilse (ör. yalnız 720p embed'de 480p)
+        # sınırsız `/b` ile en iyi mevcuda düşülmeli — "format yok" hatası olmasın.
+        sel = build_format_selector(preset)
+        assert sel.endswith("/b")
+        # Son dal koşulsuz olmalı (height kısıtı taşımamalı).
+        assert sel.rsplit("/", 1)[-1] == "b"
+
     def test_audio_preset(self):
         assert build_format_selector("audio") == "ba/b"
 
@@ -326,6 +335,37 @@ class TestPostDownloadVerification:
                 download_dir=str(tmp_path),
             )  # exception olmamalı
 
+    def test_cancel_cleans_part_files(self, tmp_path):
+        """İptal (progress hook'tan non-YoutubeDLError) sonrası .part temizlenmeli.
+
+        id 'downloading' event'inde yakalanmalı (finished hiç gelmez) ve cleanup
+        YoutubeDLError olmayan istisnada da çalışmalı."""
+        class _Cancelled(Exception):
+            pass
+        # İndirme başladı, parça dosyaları oluştu, sonra kullanıcı iptal etti.
+        part = tmp_path / "video [vid42] 480p.mp4.part-Frag1"
+        part.write_bytes(b"x")
+        ydl_class = MagicMock()
+        ctx = ydl_class.return_value.__enter__.return_value
+
+        def fake_download(_urls):
+            opts = ydl_class.call_args[0][0]
+            # downloading event: id burada gelir (finished asla gelmez)
+            opts["progress_hooks"][0]({
+                "status": "downloading", "downloaded_bytes": 1, "total_bytes": 100,
+                "info_dict": {"id": "vid42"},
+            })
+            raise _Cancelled()  # kullanıcı iptali
+
+        ctx.download.side_effect = fake_download
+        with patch.object(ytdlp_engine, "YoutubeDL", ydl_class):
+            with pytest.raises(_Cancelled):  # istisna aynen yükseltilmeli
+                ytdlp_engine.download(
+                    url="https://x/v", selection="480p",
+                    download_dir=str(tmp_path),
+                )
+        assert not part.exists()  # iptal sonrası çöp parça temizlendi
+
 
 class TestCleanupArtifacts:
     def test_removes_part_files_with_matching_id(self, tmp_path):
@@ -343,10 +383,36 @@ class TestCleanupArtifacts:
         assert not part2.exists()
         assert not ytdl_file.exists()
 
-    def test_no_id_is_noop(self, tmp_path):
+    def test_removes_aria2c_fragment_files(self, tmp_path):
+        # aria2c HLS parçaları leftover işaretini adın ORTASINDA taşır:
+        # 'video [abc123] 480p.mp4.part-Frag44' — endswith(".part") tutmaz,
+        # substring eşleşmesi gerekir.
+        frag = tmp_path / "video [abc123] 480p.mp4.part-Frag44"
+        frag_aria = tmp_path / "video [abc123] 480p.mp4.part-Frag44.aria2"
+        done = tmp_path / "video [abc123] 480p.mp4"
+        for f in (frag, frag_aria, done):
+            f.write_bytes(b"x")
+        ytdlp_engine._cleanup_artifacts(tmp_path, {"id": "abc123"})
+        assert not frag.exists()
+        assert not frag_aria.exists()
+        assert done.exists()  # tamamlanmış dosya korunur
+
+    def test_removes_by_name_prefix_when_id_missing(self, tmp_path):
+        # İptal senaryosu: id yakalanamadı ama title-locked outtmpl öneki biliniyor.
+        frag = tmp_path / "Video 1 [playlist] 480p.mp4.part-Frag5"
+        bare = tmp_path / "Video 1 [playlist] 480p.mp4.part"
+        other = tmp_path / "Baska Video [xyz] best.mp4.part"  # farklı önek → korunur
+        for f in (frag, bare, other):
+            f.write_bytes(b"x")
+        ytdlp_engine._cleanup_artifacts(tmp_path, {}, name_prefix="Video 1 [")
+        assert not frag.exists()
+        assert not bare.exists()
+        assert other.exists()  # başka indirmenin parçası korunur
+
+    def test_no_id_and_no_prefix_is_noop(self, tmp_path):
         part = tmp_path / "video [abc123] best.part"
         part.write_bytes(b"x")
-        ytdlp_engine._cleanup_artifacts(tmp_path, {})
+        ytdlp_engine._cleanup_artifacts(tmp_path, {})  # ne id ne önek
         assert part.exists()  # bilinmiyor → dokunma
 
     def test_missing_dir_silently_ignored(self, tmp_path):

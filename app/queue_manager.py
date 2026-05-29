@@ -173,12 +173,14 @@ class QueueManager:
             )
         except _Cancelled:
             job.status = "cancelled"
+            await self._cleanup_partial(job)
         except EngineError as exc:
             if job.cancel_requested:
                 job.status = "cancelled"
             else:
                 job.status = "error"
                 job.error = str(exc)
+            await self._cleanup_partial(job)
         except Exception:  # beklenmeyen — ham ayrıntı kullanıcıya sızmaz
             if job.cancel_requested:
                 job.status = "cancelled"
@@ -186,6 +188,7 @@ class QueueManager:
                 logger.exception("İş işlenirken beklenmeyen hata: %s", job.job_id)
                 job.status = "error"
                 job.error = "Beklenmeyen bir hata oluştu"
+            await self._cleanup_partial(job)
         else:
             if job.cancel_requested:
                 job.status = "cancelled"
@@ -197,6 +200,23 @@ class QueueManager:
             else:
                 job.status = "completed"
                 job.progress = 100.0
+
+    async def _cleanup_partial(self, job: Job) -> None:
+        """İptal/hata sonrası yarım parça dosyalarını ikinci geçişte temizler.
+
+        `download()` döndükten SONRA çağrılır: o noktada yt-dlp indirici nesnesi
+        referanssızdır, gc.collect() tutacı kapatır ve ana `.mp4.part` da silinir
+        (bkz. ytdlp_engine.cleanup_partial_files). Engine'in title-locked dosya
+        adı önekiyle aynı `title` kullanılır.
+        """
+        title = job.title if job.title_locked else None
+        try:
+            await asyncio.to_thread(
+                ytdlp_engine.cleanup_partial_files,
+                job.download_dir, title=title, selection=job.selection,
+            )
+        except Exception:
+            logger.debug("Parça temizliği başarısız (önemsiz): %s", job.job_id)
 
     def _make_progress_hook(self, job: Job) -> Callable[[dict], None]:
         """Bir iş için yt-dlp progress_hook callback'i üretir.

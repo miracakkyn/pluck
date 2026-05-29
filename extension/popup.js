@@ -143,7 +143,10 @@ async function getActiveTab() {
 async function injectContentScript(tabId) {
   try {
     await chrome.scripting.executeScript({
-      target: { tabId, allFrames: true },
+      // Yalnızca üst çerçeve: alt iframe'lere de enjekte etmek hem üst sayfada
+      // (iframe elementine) hem iframe içinde (kendi <video>'suna) rozet koyup
+      // ÇİFT rozete yol açıyordu. Üst çerçeve iframe elementini zaten rozetler.
+      target: { tabId, allFrames: false },
       files: ["content.js"],
     });
     return true;

@@ -60,8 +60,15 @@ kurulum/başlatma komutları olmalı; bunlar README'de ayrı belgelenir.
 - [x] Sprint 10 — Eklenti content script + IDM tarzı sayfa-içi indir rozeti (programatik inject, webRequest sniffer, Shadow DOM overlay)
 - [x] Sprint 11 — Otomatik tarama + rozet toggle + kalite seçim menüsü; popover hidden fix; iframe/player-container rozet (Ders-1)
 - [x] Sprint 12 — HLS codec=None formatlarını listele (_infer_kind_without_codecs); rozet indirmesine çerez+referer (login'li embed'ler); JobRequest.referer zinciri
+- [x] Sprint 13 — Çözünürlük preset'lerine sınırsız /b fallback (yalnız-720p embed'de 480p artık iner); rozet kalite menüsü tıklama fix (capture-phase dış-tıklama handler'ı); çift rozet fix (all_frames:false + örtüşme dedup); iptal/hata sonrası fragment temizliği (gc + retry loop + queue ikinci-geçiş)
 
-Test: 130 test, %96+ kapsam. Çalıştır: `.venv\Scripts\python.exe -m pytest`
+Test: 140 test, %96+ kapsam. Çalıştır: `.venv\Scripts\python.exe -m pytest`
+
+> Not: BunnyCDN/MediaDelivery gibi siteler login arkasında — eklenti yalnız
+> aktif sekme URL'sini motora verir. **Tekrar eden "Requested format is not
+> available" hatasının ana nedeni genelde arka planda kalan ESKİ sunucudur:**
+> eklenti 8765-8770 aralığında ilk yanıt verene bağlanır; eski kodlu bayat bir
+> sunucu varsa onu kullanır. Tek bir güncel `python run.py` çalıştığından emin ol.
 Uygulamayı çalıştır: `.venv\Scripts\python.exe run.py` (veya start.bat / start.command)
 Eklenti: `chrome://extensions` → Geliştirici modu → Paketlenmemiş yükle → `extension/`
 

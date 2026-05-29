@@ -7,8 +7,10 @@ fonksiyonlar (`list_formats`, `download`) çağıran taraf tarafından
 """
 from __future__ import annotations
 
+import gc
 import re
 import shutil
+import time
 from collections.abc import Callable
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -37,9 +39,12 @@ PRESETS: tuple[str, ...] = ("best", "1080p", "720p", "480p", "audio")
 # düşülür (yine de ses içerir).
 _PRESET_SELECTORS: dict[str, str] = {
     "best": "bv*[ext=mp4]+ba[ext=m4a]/bv*+ba/b",
-    "1080p": "bv*[height<=1080][ext=mp4]+ba[ext=m4a]/bv*[height<=1080]+ba/b[height<=1080]",
-    "720p": "bv*[height<=720][ext=mp4]+ba[ext=m4a]/bv*[height<=720]+ba/b[height<=720]",
-    "480p": "bv*[height<=480][ext=mp4]+ba[ext=m4a]/bv*[height<=480]+ba/b[height<=480]",
+    # Çözünürlük preset'lerinin son dalı sınırsız `/b`: istenen yükseklikte
+    # format yoksa (örn. yalnızca 720p sunan BunnyCDN embed'inde 480p seçmek)
+    # "Requested format is not available" yerine mevcut en iyi formata düşülür.
+    "1080p": "bv*[height<=1080][ext=mp4]+ba[ext=m4a]/bv*[height<=1080]+ba/b[height<=1080]/b",
+    "720p": "bv*[height<=720][ext=mp4]+ba[ext=m4a]/bv*[height<=720]+ba/b[height<=720]/b",
+    "480p": "bv*[height<=480][ext=mp4]+ba[ext=m4a]/bv*[height<=480]+ba/b[height<=480]/b",
     "audio": "ba/b",
 }
 
@@ -452,34 +457,111 @@ def _selection_needs_ffmpeg(selection: str) -> bool:
     return True
 
 
-def _cleanup_artifacts(download_dir: Path, info: dict | None) -> None:
-    """Yarım kalan parça/temp dosyaları temizler.
+def _is_leftover_name(name: str) -> bool:
+    """Dosya adı yarım-indirme artığı mı?
 
-    Glob shell metakarakterlerini etkisizleştirmek için yt-dlp'nin verdiği
-    `id` ve sanitize edilmiş başlık üzerinden filtreler. Hata yutar —
-    cleanup'ın kendisi indirme hatasını gizlememeli.
+    `endswith` yetmez: aria2c HLS parçaları `....mp4.part-Frag44`,
+    `....mp4.part-Frag44.aria2` gibi adlar üretir — leftover işareti adın
+    ORTASINDA kalır. Bu yüzden işaretleri substring olarak ararız. `[id]`
+    kapısıyla zaten o indirmeye özgü dosyalara daraltıldığı için güvenli.
     """
-    if not info:
-        return
-    video_id = str(info.get("id") or "").strip()
-    if not video_id:
-        return
+    return any(marker in name for marker in _LEFTOVER_SUFFIXES)
+
+
+def _matching_leftovers(
+    download_dir: Path, needle: str | None, prefix: str | None,
+) -> list[Path]:
+    """download_dir içindeki, bu indirmeye ait yarım-parça dosyalarını döndürür."""
+    found: list[Path] = []
     try:
         for entry in download_dir.iterdir():
             if not entry.is_file():
                 continue
             name = entry.name
-            # Hem [id] içeren hem de bilinen leftover uzantısıyla biten dosyalar.
-            if f"[{video_id}]" not in name:
+            if not _is_leftover_name(name):
                 continue
-            if not any(name.endswith(suffix) for suffix in _LEFTOVER_SUFFIXES):
-                continue
+            matches_id = needle is not None and needle in name
+            matches_prefix = prefix is not None and name.startswith(prefix)
+            if matches_id or matches_prefix:
+                found.append(entry)
+    except OSError:
+        pass
+    return found
+
+
+def _cleanup_artifacts(
+    download_dir: Path,
+    info: dict | None,
+    name_prefix: str | None = None,
+    max_wait: float = 3.0,
+) -> None:
+    """Yarım kalan parça/temp dosyaları temizler.
+
+    İki eşleştirme ölçütünden biri tutmalı (ve dosya leftover işareti taşımalı):
+    - `[{id}]` — yt-dlp'nin verdiği video id'si (progress hook'tan yakalanmışsa).
+    - `name_prefix` ile başlama — `outtmpl`'in sabit öneki (title-locked işlerde
+      `{safe_title} [`). İPTAL için kritik: aria2c harici indirici kullanılırken
+      progress hook id'yi yakalayamadan iptal gelebilir; id boş kalsa bile önek
+      eşleşmesiyle çöp parçalar temizlenir.
+
+    İptalde aria2c hemen ölmez (~1-3sn) ve ölürken 0-baytlık `.part`'ı YENİDEN
+    yazabilir; bu yüzden tek silme yetmez. Bir tarama hiç eşleşme bulmayana ya da
+    `max_wait` dolana kadar döngüde silinir. Başarı yolunda (aria2c yok) ilk
+    silmeden sonra ikinci tarama boş döner → anında çıkar. Hata yutar.
+    """
+    video_id = str((info or {}).get("id") or "").strip()
+    needle = f"[{video_id}]" if video_id else None
+    prefix = name_prefix or None
+    if needle is None and prefix is None:
+        return  # ne id ne önek — neyi sileceğimizi bilmiyoruz, dokunma
+
+    # yt-dlp'nin indirici nesnesi (with-bloğu çıktıktan sonra referanssız) ana
+    # `.mp4.part` dosyasının tutacını açık bırakabiliyor; Windows'ta bu, dosyanın
+    # silinmesini engeller. gc.collect() nesneyi sonlandırıp tutacı kapatır →
+    # parça dosyaları sorunsuz silinir.
+    gc.collect()
+
+    deadline = time.monotonic() + max_wait
+    while True:
+        remaining = _matching_leftovers(download_dir, needle, prefix)
+        if not remaining:
+            return
+        for entry in remaining:
             try:
                 entry.unlink(missing_ok=True)
             except OSError:
-                pass
-    except OSError:
-        pass
+                pass  # kilitli (aria2c hâlâ ölüyor) — sonraki turda yeniden dene
+        # Silme kalıcı oldu mu? Kalmadıysa bitti (başarı yolunda hızlı çıkış).
+        if not _matching_leftovers(download_dir, needle, prefix):
+            return
+        if time.monotonic() >= deadline:
+            return
+        time.sleep(0.4)
+
+
+def cleanup_partial_files(
+    download_dir: str | Path,
+    *,
+    title: str | None,
+    selection: str,
+) -> None:
+    """İptal/hata sonrası yarım kalan parça dosyalarını temizler (ikinci geçiş).
+
+    `download()` İÇİNDEKİ cleanup, fonksiyon henüz dönmediği ve yt-dlp indirici
+    nesnesi `except` bloğunda hâlâ referanslı olduğu için ana `.mp4.part`
+    dosyasının tutacını kapatamaz (Windows'ta silinemez). Bu fonksiyon
+    `download()` TAMAMEN döndükten SONRA (queue_manager tarafından) çağrılır;
+    frame yok olduğundan gc.collect() indiriciyi sonlandırıp tutacı kapatır ve
+    ana parça da silinir. Yalnızca title-locked işlerde önek bilinir.
+    """
+    if not title:
+        return  # önek yok — in-download id-tabanlı temizliğe bırak
+    prefix = f"{_sanitize_for_filename(title)} ["
+    # download() döndükten sonra ikinci geçiş: aria2c ölürken yeniden yazılan
+    # parçaları yakalar. Ana `.mp4.part`, fragment indirme thread havuzunca
+    # süreç ömrü boyunca açık tutulabildiğinden bu oturumda silinemeyebilir
+    # (yt-dlp/Windows kısıtı) — kısa pencere yeterli, worker'ı boşuna bekletme.
+    _cleanup_artifacts(Path(download_dir), {}, prefix, max_wait=3.0)
 
 
 def download(
@@ -518,8 +600,12 @@ def download(
     if title:
         safe_title = _sanitize_for_filename(title)
         outtmpl = f"{safe_title} [%(id)s] {selection}.%(ext)s"
+        # outtmpl'in sabit öneki — iptal/hata sonrası çöp parça temizliğinde
+        # id yakalanmasa bile bu önekle eşleşen .part dosyaları silinir.
+        cleanup_prefix = f"{safe_title} ["
     else:
         outtmpl = f"%(title)s [%(id)s] {selection}.%(ext)s"
+        cleanup_prefix = None  # title yok → id-tabanlı temizliğe güven
 
     # postprocessor_hooks ile merge sonrası nihai dosya yolunu yakala; bu yol
     # progress_hook'taki "finished" event'inden daha güvenilirdir (merge
@@ -536,13 +622,15 @@ def download(
     captured_info: dict = {}
 
     def _wrapped_progress(data: dict) -> None:
-        # Son finished event'inde info_dict'i sakla; cleanup için id lazım.
-        if data.get("status") == "finished":
-            info = data.get("info_dict") or {}
-            if info.get("id"):
-                captured_info.update(info)
-            if data.get("filename"):
-                final_filename.setdefault("path", data["filename"])
+        # id'yi MÜMKÜN OLAN EN ERKEN yakala: iptal/hata indirme ortasında
+        # gelirse "finished" event'i hiç ateşlenmez; o yüzden "downloading"
+        # event'lerinde de id'yi sakla — yoksa cleanup id bulamaz, .part
+        # parçaları silinmez (iptal sonrası çöp dosya birikir).
+        info = data.get("info_dict") or {}
+        if info.get("id") and not captured_info.get("id"):
+            captured_info.update(info)
+        if data.get("status") == "finished" and data.get("filename"):
+            final_filename.setdefault("path", data["filename"])
         if progress_hook is not None:
             progress_hook(data)
 
@@ -601,18 +689,32 @@ def download(
             ],
         }
 
-    try:
+    def _execute() -> None:
+        # YoutubeDL'i ayrı bir frame'de çalıştır: istisna fırlarsa bu frame
+        # çözülür ve `ydl` referansı düşer. cleanup'taki gc.collect() ancak o
+        # zaman indirici nesnesini sonlandırıp ana `.mp4.part` dosyasının
+        # tutacını kapatabilir (referans `except` içinde canlı kalırsa kapanmaz).
         with YoutubeDL(options) as ydl:
             ydl.download([url])
+
+    try:
+        _execute()
     except YoutubeDLError as exc:
-        _cleanup_artifacts(download_path, captured_info)
+        _cleanup_artifacts(download_path, captured_info, cleanup_prefix)
         raise EngineError(_clean_error(exc)) from exc
+    except BaseException:
+        # İptal (queue_manager progress hook'tan _Cancelled fırlatır) veya
+        # başka herhangi bir kesinti: yt-dlp bunu YoutubeDLError'a sarmalamaz,
+        # bu yüzden ayrıca yakala. Artıkları temizle ve istisnayı aynen yükselt
+        # (queue_manager iptal/hata ayrımını bayrağa göre yapar).
+        _cleanup_artifacts(download_path, captured_info, cleanup_prefix)
+        raise
 
     # yt-dlp exception fırlatmasa bile merge çökmüş olabilir — diskte nihai
     # dosyanın gerçekten var olduğunu doğrula. Yoksa .part'lar geride kalır.
     expected = final_filename.get("path")
     if expected and not Path(expected).exists():
-        _cleanup_artifacts(download_path, captured_info)
+        _cleanup_artifacts(download_path, captured_info, cleanup_prefix)
         raise EngineError(
             "İndirme tamamlanamadı — ffmpeg birleştirmesi başarısız olmuş "
             "olabilir. ffmpeg sürümünü kontrol edin."
@@ -620,4 +722,4 @@ def download(
     if not expected:
         # Hiçbir nihai yol yakalanmadıysa kuyruk tarafı yine de hata işaretler
         # (queue_manager kontrolü); burada en azından artığı temizle.
-        _cleanup_artifacts(download_path, captured_info)
+        _cleanup_artifacts(download_path, captured_info, cleanup_prefix)

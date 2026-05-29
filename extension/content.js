@@ -117,10 +117,32 @@
 
   // --- rozet + popover ---------------------------------------------------
 
+  /** Yeni hedefin merkezi, zaten rozetlenmiş bir hedefin alanına düşüyor mu?
+   *  Aynı oynatıcı bölgesine (ör. <video> + onu saran "player" div'i) iki
+   *  rozet konmasını önler. */
+  function centerInsideExistingBadge(rect) {
+    const cx = rect.left + rect.width / 2;
+    const cy = rect.top + rect.height / 2;
+    for (const entry of badges.values()) {
+      const r = entry.target.getBoundingClientRect();
+      if (r.width === 0 || r.height === 0) continue;
+      if (cx >= r.left && cx <= r.right && cy >= r.top && cy <= r.bottom) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   /** Hedef DOM element'i (video / iframe / div container) için rozet inşa eder.
-   *  Aynı element için tekrar çağrılırsa hiçbir şey yapmaz. */
+   *  Aynı element için tekrar çağrılırsa veya başka bir rozetle örtüşürse
+   *  hiçbir şey yapmaz. */
   function buildBadge(target) {
     if (badges.has(target)) return;
+    const rect0 = target.getBoundingClientRect();
+    // Çok küçük (henüz yüklenmemiş olabilir — periyodik tarama tekrar dener)
+    // veya başka bir rozetin alanına düşüyorsa atla (çift rozet önleme).
+    if (rect0.width < MIN_VIDEO_W || rect0.height < MIN_VIDEO_H) return;
+    if (centerInsideExistingBadge(rect0)) return;
     const host = document.createElement("div");
     host.style.cssText = [
       "all:initial",
@@ -306,10 +328,18 @@
 
   // --- dış tıklama popover'ı kapatır --------------------------------------
 
+  // Capture fazında çalışır (true) — bu nedenle popover option'ının kendi
+  // handler'ından ÖNCE ateşlenir. Kendi overlay host'umuza tıklandıysa
+  // kapatmayı ATLA; yoksa popover, option click işlenmeden display:none olur
+  // ve triggerDownload hiç çağrılmaz (rozetten kalite seçince indirme
+  // başlamama bug'ının kök nedeni). Kapalı shadow root'ta composedPath()
+  // iç düğümleri göstermez ama host'u içerir.
   document.addEventListener("click", (ev) => {
-    // Popover içinde tıklandıysa Shadow DOM içinde stop edildi; buraya gelmez.
+    const path = (typeof ev.composedPath === "function") ? ev.composedPath() : [];
     for (const entry of badges.values()) {
-      if (entry.popoverOpen) closePopover(entry);
+      if (!entry.popoverOpen) continue;
+      if (path.includes(entry.host)) continue;  // kendi overlay'imize tıklandı
+      closePopover(entry);
     }
   }, true);
 
