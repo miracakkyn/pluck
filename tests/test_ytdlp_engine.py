@@ -342,7 +342,9 @@ class TestDownload:
 
 class TestFfmpegPrecheck:
     def test_missing_ffmpeg_raises_for_video(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(ytdlp_engine, "_FFMPEG_AVAILABLE", False)
+        # _ffmpeg_available() re-probe yaptığından (kurulum-sonrası tespit için),
+        # "ffmpeg yok" senaryosunu helper'ı doğrudan mock'layarak kur.
+        monkeypatch.setattr(ytdlp_engine, "_ffmpeg_available", lambda: False)
         with pytest.raises(EngineError) as exc:
             ytdlp_engine.download(
                 url="https://x/v", selection="best", download_dir=str(tmp_path),
@@ -350,7 +352,7 @@ class TestFfmpegPrecheck:
         assert "ffmpeg" in str(exc.value).lower()
 
     def test_missing_ffmpeg_raises_for_audio(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(ytdlp_engine, "_FFMPEG_AVAILABLE", False)
+        monkeypatch.setattr(ytdlp_engine, "_ffmpeg_available", lambda: False)
         with pytest.raises(EngineError):
             ytdlp_engine.download(
                 url="https://x/v", selection="audio", download_dir=str(tmp_path),

@@ -31,7 +31,53 @@ _ARIA2C_AVAILABLE: bool = shutil.which("aria2c") is not None
 # Yoksa kullanıcıya net hata gösterilir, sessizce yarım dosya bırakmak yerine.
 _FFMPEG_AVAILABLE: bool = shutil.which("ffmpeg") is not None
 
+
+def _ffmpeg_available() -> bool:
+    """ffmpeg kullanılabilir mi. Import anındaki değeri kullanır; o False ise
+    yeniden yoklar — kullanıcı motoru BAŞLATTIKTAN SONRA ffmpeg kurmuş olabilir
+    (aksi halde yeniden başlatana kadar 'ffmpeg yok' hatası alırdı)."""
+    global _FFMPEG_AVAILABLE
+    if not _FFMPEG_AVAILABLE:
+        _FFMPEG_AVAILABLE = shutil.which("ffmpeg") is not None
+    return _FFMPEG_AVAILABLE
+
+
+def _aria2c_available() -> bool:
+    """aria2c kullanılabilir mi. Import anındaki değeri kullanır; o False ise
+    yeniden yoklar (başlatmadan sonra kurulmuş olabilir)."""
+    global _ARIA2C_AVAILABLE
+    if not _ARIA2C_AVAILABLE:
+        _ARIA2C_AVAILABLE = shutil.which("aria2c") is not None
+    return _ARIA2C_AVAILABLE
+
+
+def _aria2c_download_options() -> dict:
+    """aria2c harici indirici seçenekleri (kuruluysa download() bunları ekler).
+
+    Her HLS/HTTP parçası için aria2c 16 paralel bağlantı açar; toplam akış =
+    (concurrent_fragment_downloads) × (aria2c connections).
+    """
+    return {
+        "external_downloader": {"http": "aria2c", "m3u8_native": "aria2c"},
+        "external_downloader_args": {
+            "aria2c": [
+                "-x16", "-s16",
+                # min split size verilmezse aria2c default 20MB; küçük HLS
+                # fragment'lerini de bölmesi için 256K'ya indir.
+                "-k256K",
+                "--summary-interval=0",
+                "--console-log-level=warn",
+                "--max-tries=3",
+                "--retry-wait=1",
+            ],
+        },
+    }
+
 # Arayüzde sunulan hazır kalite preset'leri (sıra önemli; "best" varsayılan).
+# Preset adlarının TEK doğruluk kaynağı. /api/config bunu döndürür; istemciler
+# (extension/content.js·background.js·popup.js, web/app.js) aynı listeyi
+# hardcode eder ve tests/test_preset_consistency.py bunların ayrışmadığını
+# doğrular (JS↔Python sınırı runtime paylaşıma engel).
 PRESETS: tuple[str, ...] = ("best", "1080p", "720p", "480p", "audio")
 
 # Preset adı -> yt-dlp format seçici string'i.
@@ -529,16 +575,6 @@ _LEFTOVER_SUFFIXES: tuple[str, ...] = (
 )
 
 
-def _selection_needs_ffmpeg(selection: str) -> bool:
-    """Bu seçim ffmpeg gerektiriyor mu (merge ya da ses çıkarma)?
-
-    Tüm preset'ler `bv*+ba` türevi olduğundan video+ses merge ister;
-    `audio` ise mp3 postprocessor ister. Ham format_id verilirse `+ba`
-    yedeği eklendiği için (build_format_selector) yine merge olasıdır.
-    """
-    return True
-
-
 def _is_leftover_name(name: str) -> bool:
     """Dosya adı yarım-indirme artığı mı?
 
@@ -677,9 +713,9 @@ def download(
     ARA parça dosyalarını (merge sonrası silinen .fNNN.mp4/.m4a) bildirir; bu
     yüzden güvenilir yol yalnızca buradan (return değeri) alınabilir.
     """
-    # ffmpeg her preset için gerekli (video+ses merge ya da audio→mp3). Yoksa
+    # ffmpeg her preset için gerekli (bv*+ba merge ya da audio→mp3). Yoksa
     # erkenden net hata ver; sessiz başarısızlıkla .part dosyalarını biriktirme.
-    if _selection_needs_ffmpeg(selection) and not _FFMPEG_AVAILABLE:
+    if not _ffmpeg_available():
         raise EngineError(
             "ffmpeg bulunamadı. macOS: 'brew install ffmpeg', "
             "Windows: 'winget install ffmpeg' ile kurun."
@@ -757,25 +793,8 @@ def download(
         options["postprocessors"] = [
             {"key": "FFmpegExtractAudio", "preferredcodec": "mp3"}
         ]
-    if _ARIA2C_AVAILABLE:
-        # Her HLS/HTTP parçası için aria2c 16 paralel bağlantı açar; toplam
-        # akış = (concurrent_fragment_downloads) × (aria2c connections).
-        options["external_downloader"] = {
-            "http": "aria2c",
-            "m3u8_native": "aria2c",
-        }
-        options["external_downloader_args"] = {
-            "aria2c": [
-                "-x16", "-s16",
-                # min split size verilmediğinde aria2c default 20MB; küçük HLS
-                # fragment'lerini de bölmesi için 256K'ya indir.
-                "-k256K",
-                "--summary-interval=0",
-                "--console-log-level=warn",
-                "--max-tries=3",
-                "--retry-wait=1",
-            ],
-        }
+    if _aria2c_available():
+        options.update(_aria2c_download_options())
 
     def _execute() -> None:
         # YoutubeDL'i ayrı bir frame'de çalıştır: istisna fırlarsa bu frame

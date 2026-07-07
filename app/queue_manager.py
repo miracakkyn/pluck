@@ -22,6 +22,11 @@ from app.ytdlp_engine import EngineError
 
 logger = logging.getLogger("videoaraci")
 
+# Bellek sınırı: JobRegistry sınırsız büyümesin (uzun oturumda birçok indirme).
+# Aşılınca en eski BİTMİŞ (completed/error/cancelled) işler düşürülür; aktif
+# işler her zaman korunur.
+_MAX_JOBS = 200
+
 
 class _Cancelled(Exception):
     """Dahili — indirmeyi iptal etmek için progress hook'tan fırlatılır."""
@@ -65,6 +70,7 @@ class QueueManager:
         self._jobs: dict[str, Job] = {}
         self._pending: asyncio.Queue[str] = asyncio.Queue()
         self._worker_task: asyncio.Task | None = None
+        self._stopping = False  # kapanışta worker yeni iş başlatmasın
 
     # --- genel API -------------------------------------------------------
 
@@ -82,7 +88,22 @@ class QueueManager:
             referer=request.referer,
         )
         self._pending.put_nowait(job_id)
+        self._evict_old_finished()
         return job_id
+
+    def _evict_old_finished(self) -> None:
+        """Kayıt _MAX_JOBS'u aşınca en eski BİTMİŞ işleri düşürür (aktifler kalır).
+
+        dict ekleme sırasını koruduğundan iterasyon en eskiden yeniye gider.
+        """
+        if len(self._jobs) <= _MAX_JOBS:
+            return
+        finished = {"completed", "error", "cancelled"}
+        for jid, job in list(self._jobs.items()):
+            if len(self._jobs) <= _MAX_JOBS:
+                break
+            if job.status in finished:
+                del self._jobs[jid]
 
     def get(self, job_id: str) -> Job | None:
         """Tek bir işi döndürür; yoksa None."""
@@ -119,23 +140,56 @@ class QueueManager:
         """Worker coroutine'ini başlatır (çalışan event loop gerektirir).
 
         `stop()` sonrası yeniden çağrılabilir; worker yeniden başlatılır.
+
+        `asyncio.Queue` ilk kullanıldığı event loop'a bağlanır; `start()` farklı
+        bir loop'ta çağrılırsa (ör. testlerde ardışık TestClient blokları, ya da
+        lifespan yeniden başlarsa) eski/kapalı loop'a bağlı kuyruk "bound to a
+        different event loop" hatası verir. Bu yüzden burada taze bir kuyruk
+        oluşturup bekleyen job_id'leri taşıyarak kuyruğu güncel loop'a bağlarız.
         """
-        if self._worker_task is None:
-            self._worker_task = asyncio.create_task(self._worker())
+        if self._worker_task is not None:
+            return
+        pending_ids: list[str] = []
+        try:
+            while True:
+                pending_ids.append(self._pending.get_nowait())
+        except asyncio.QueueEmpty:
+            pass
+        self._pending = asyncio.Queue()
+        for jid in pending_ids:
+            self._pending.put_nowait(jid)
+        self._worker_task = asyncio.create_task(self._worker())
 
     async def stop(self) -> None:
-        """Worker'ı durdurur; devam eden indirme varsa nazikçe sonlanmasını ister."""
-        # Çalışan indirme thread'inin progress hook'u _Cancelled fırlatıp çıksın.
+        """Worker'ı durdurur; devam eden indirmeyi nazikçe sonlandırmayı dener.
+
+        Python thread'leri zorla durdurulamaz; bu yüzden devam eden indirmenin
+        progress hook'u `_Cancelled` fırlatıp thread'i kendisi sonlandırsın diye
+        cancel bayrağı set edilir ve iş sınırlı bir pencerede nazikçe bitene
+        kadar beklenir. İlerleme gelmiyorsa (ör. uzun ffmpeg merge) sonsuza kadar
+        beklemeyip worker görevini iptal eder (thread arka planda kendiliğinden
+        biter). `_stopping` bayrağı bu sırada yeni iş başlatılmasını engeller.
+        """
+        self._stopping = True
         for job in self._jobs.values():
             if job.status == "downloading":
                 job.cancel_requested = True
-        if self._worker_task is not None:
-            self._worker_task.cancel()
-            try:
-                await self._worker_task
-            except asyncio.CancelledError:
-                pass
-            self._worker_task = None
+        if self._worker_task is None:
+            self._stopping = False
+            return
+        # Devam eden iş cancel'ı görüp thread'ini sonlandırana kadar sınırlı süre
+        # bekle (progress hook periyodu genelde < 0.5sn).
+        for _ in range(30):  # ~3 sn üst sınır
+            if not any(j.status == "downloading" for j in self._jobs.values()):
+                break
+            await asyncio.sleep(0.1)
+        self._worker_task.cancel()
+        try:
+            await self._worker_task
+        except asyncio.CancelledError:
+            pass
+        self._worker_task = None
+        self._stopping = False  # start() ile yeniden başlatılabilsin
 
     # --- iç işleyiş ------------------------------------------------------
 
@@ -144,6 +198,8 @@ class QueueManager:
         while True:
             job_id = await self._pending.get()
             try:
+                if self._stopping:
+                    continue  # kapanış: bekleyen yeni işleri başlatma
                 job = self._jobs.get(job_id)
                 if job is not None and job.status == "queued":
                     await self._run_job(job)
