@@ -1,5 +1,7 @@
 """main.py — /api/config ve /api/formats uç testleri (motor mock'lanır)."""
-from unittest.mock import AsyncMock, patch
+import asyncio
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi.testclient import TestClient
 
@@ -278,3 +280,130 @@ def test_events_endpoint_is_sse():
     assert resp.status_code == 200
     assert resp.headers["content-type"].startswith("text/event-stream")
     assert resp.text.startswith("data: ")
+
+
+# --- #37 /api/probe-urls defansif 500 (main.py 136-138) --------------------
+
+def test_post_probe_urls_unexpected_error_is_500_without_leak():
+    # _extract_each normalde kendi hatalarını yutar; buna rağmen beklenmeyen bir
+    # istisna kaçarsa 500'e dönüşmeli ve iç ayrıntı gövdeye SIZMAMALI.
+    with patch("app.main.ytdlp_engine._extract_each",
+               side_effect=RuntimeError("ic gizli ayrinti")):
+        resp = client.post("/api/probe-urls", json={
+            "urls": ["https://cdn.b-cdn.net/u/playlist.m3u8"],
+            "referer": "https://page.com/",
+        })
+    assert resp.status_code == 500
+    # Ham istisna metni yanıtta görünmemeli (bilgi sızıntısı yok).
+    assert "ic gizli ayrinti" not in resp.json()["detail"]
+    assert resp.json()["detail"] == "Beklenmeyen bir hata oluştu"
+
+
+# --- #35 lifespan worker görev yaşam döngüsü ------------------------------
+
+def test_lifespan_worker_task_running_inside_and_cleared_after():
+    # lifespan başlangıcı indirme worker görevini GERÇEKTEN başlatmalı (not-None,
+    # aktif); `with` çıkışı ise onu düzgünce durdurup None'a çekmeli.
+    from app.main import queue_manager
+
+    with TestClient(app, headers=_TOKEN_HDR) as managed:
+        assert managed.get("/api/config").status_code == 200
+        # Blok içindeyken worker görevi var ve henüz bitmemiş olmalı.
+        assert queue_manager._worker_task is not None
+        assert not queue_manager._worker_task.done()
+    # lifespan kapanışı worker'ı durdurduğundan görev referansı temizlenmeli.
+    assert queue_manager._worker_task is None
+
+
+# --- #15 _run_folder_picker alt-process orkestrasyonu (main.py 198-228) ----
+
+def _make_fake_proc(stdout=b"", stderr=b"", returncode=0, communicate_exc=None):
+    """create_subprocess_exec'in döndürdüğü Process nesnesini taklit eder."""
+    proc = MagicMock()
+    if communicate_exc is not None:
+        proc.communicate = AsyncMock(side_effect=communicate_exc)
+    else:
+        proc.communicate = AsyncMock(return_value=(stdout, stderr))
+    proc.wait = AsyncMock(return_value=returncode)
+    proc.kill = MagicMock()
+    proc.returncode = returncode
+    return proc
+
+
+def _reset_picker_state():
+    # POST /api/pick-folder'ın yaptığı gibi: pencere açık, sonuç henüz yok.
+    from app.main import _picker_state
+    _picker_state.update({"pending": True, "path": None, "error": None})
+
+
+async def test_run_folder_picker_success_writes_path():
+    from app.main import _picker_state, _run_folder_picker
+    _reset_picker_state()
+    chosen = str(Path.home() / "Downloads")
+    proc = _make_fake_proc(stdout=chosen.encode("utf-8"), returncode=0)
+    with patch("app.main.asyncio.create_subprocess_exec",
+               new=AsyncMock(return_value=proc)):
+        await _run_folder_picker()
+    # stdout'taki yol state'e yazıldı; hata yok; pencere kapandı (pending False).
+    assert _picker_state["path"] == chosen
+    assert _picker_state["error"] is None
+    assert _picker_state["pending"] is False
+
+
+async def test_run_folder_picker_nonzero_returncode_writes_error():
+    from app.main import _picker_state, _run_folder_picker
+    _reset_picker_state()
+    # Boş stdout + sıfır-olmayan çıkış kodu → başarısızlık dalı (hata mesajı).
+    proc = _make_fake_proc(stdout=b"", stderr=b"tkinter yok", returncode=3)
+    with patch("app.main.asyncio.create_subprocess_exec",
+               new=AsyncMock(return_value=proc)):
+        await _run_folder_picker()
+    assert _picker_state["path"] is None
+    assert _picker_state["error"] is not None
+    assert "Klasör seçici" in _picker_state["error"]
+    assert _picker_state["pending"] is False
+
+
+async def test_run_folder_picker_oserror_on_spawn_writes_start_error():
+    from app.main import _picker_state, _run_folder_picker
+    _reset_picker_state()
+    # Alt-process hiç başlatılamazsa (OSError) net bir başlatma hatası yazılmalı.
+    with patch("app.main.asyncio.create_subprocess_exec",
+               new=AsyncMock(side_effect=OSError("başlatılamadı"))):
+        await _run_folder_picker()
+    assert _picker_state["error"] == "Klasör seçici başlatılamadı"
+    assert _picker_state["path"] is None
+    assert _picker_state["pending"] is False
+
+
+async def test_run_folder_picker_timeout_kills_process_and_writes_error():
+    from app.main import _picker_state, _run_folder_picker
+    _reset_picker_state()
+    # communicate zaman aşımına uğrarsa süreç öldürülmeli ve hata yazılmalı.
+    proc = _make_fake_proc(communicate_exc=asyncio.TimeoutError())
+    with patch("app.main.asyncio.create_subprocess_exec",
+               new=AsyncMock(return_value=proc)):
+        await _run_folder_picker()
+    assert _picker_state["error"] == "Klasör seçici zaman aşımına uğradı"
+    proc.kill.assert_called_once()      # süreç zorla sonlandırıldı
+    proc.wait.assert_awaited_once()     # zombie kalmasın diye beklendi
+    assert _picker_state["path"] is None
+    assert _picker_state["pending"] is False
+
+
+def test_pick_folder_post_triggers_picker_task_then_get_returns_state():
+    # POST gerçek _run_folder_picker'ı (mock) bir task olarak tetikler; ardından
+    # GET güncel durumu döndürür. Gerçek pencere/alt-process açılmaz.
+    from app.main import _picker_state
+    _picker_state.update({"pending": False, "path": None, "error": None})
+    started = AsyncMock()
+    with patch("app.main._run_folder_picker", new=started):
+        post = client.post("/api/pick-folder")
+        get = client.get("/api/pick-folder")
+    assert post.status_code == 200
+    assert post.json()["pending"] is True
+    # Görev planlandığından mock coroutine en az bir kez çağrılmış olmalı.
+    started.assert_called_once()
+    assert get.status_code == 200
+    assert get.json()["pending"] is True
+    _picker_state["pending"] = False

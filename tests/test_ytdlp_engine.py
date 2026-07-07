@@ -799,3 +799,430 @@ class TestCleanError:
     def test_empty_returns_default(self):
         from app.ytdlp_engine import _clean_error
         assert _clean_error(Exception("")) == "Bilinmeyen indirme hatası"
+
+
+# ---------------------------------------------------------------------------
+# Sprint 18: kapsam boşlukları — sayfa tarama, temizlik, title outtmpl,
+# playlist merge, _extract_each davranışı, saf yardımcılar.
+# ---------------------------------------------------------------------------
+
+
+def _mock_ydl_urlopen(html_by_url, fetched=None):
+    """`with YoutubeDL(opts) as ydl: ydl.urlopen(url).read()` akışını taklit eder.
+
+    `html_by_url[url]` string'i UTF-8 baytlara çevrilip döndürülür; URL sözlükte
+    yoksa OSError fırlatılır (fetch başarısızlığı — best-effort tarama testi).
+    `fetched` verilirse fetch edilen her URL sırayla ona eklenir (SSRF savunması
+    için hangi kaynakların gerçekten çekildiğini doğrulamak amacıyla).
+    """
+    class _Resp:
+        def __init__(self, data: bytes):
+            self._data = data
+
+        def read(self) -> bytes:
+            return self._data
+
+    class _FakeYDL:
+        def __init__(self, opts):
+            self.opts = opts
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def urlopen(self, url):
+            if fetched is not None:
+                fetched.append(url)
+            if url in html_by_url:
+                return _Resp(html_by_url[url].encode("utf-8"))
+            raise OSError(f"mock yok: {url}")
+
+    return _FakeYDL
+
+
+class TestScanPageForVideoUrls:
+    """#10 _scan_page_for_video_urls: ana sayfa + iframe ikinci geçiş + SSRF."""
+
+    def test_main_page_and_iframe_second_pass_collect_all(self):
+        # Ana sayfa: 1 doğrudan m3u8 + 2 iframe (mediadelivery + jwplayer).
+        # Her iframe'in İÇİNDE ayrı bir m3u8 var → ikinci geçişte toplanmalı.
+        page_url = "https://course.example/ders-1"
+        md_embed = "https://iframe.mediadelivery.net/embed/12345/abc-def-1234"
+        jw_iframe = "https://cdn.jwplayer.com/players/xyz789"
+        main_m3u8 = "https://cdn.other-host.com/main/stream.m3u8"
+        md_inner = "https://vz.b-cdn.net/abcd1234-5678/playlist.m3u8"
+        jw_inner = "https://media.jwpsrv.com/inner/clip.m3u8"
+        main_html = (
+            f'<iframe src="{md_embed}"></iframe>'
+            f'<iframe src="{jw_iframe}"></iframe>'
+            f'<source src="{main_m3u8}">'
+        )
+        html_by_url = {
+            page_url: main_html,
+            md_embed: f'<source src="{md_inner}">',
+            jw_iframe: f'<source src="{jw_inner}">',
+        }
+        fetched: list[str] = []
+        with patch.object(
+            ytdlp_engine, "YoutubeDL",
+            _mock_ydl_urlopen(html_by_url, fetched),
+        ):
+            result = ytdlp_engine._scan_page_for_video_urls(page_url, None)
+        # 5 URL: ana m3u8 + md embed adayı + md iframe m3u8 + jw iframe adayı +
+        # jw iframe m3u8. Hepsi tam olarak bir kez, fazlası yok.
+        assert set(result) == {md_embed, main_m3u8, md_inner, jw_iframe, jw_inner}
+        assert len(result) == 5
+        # İkinci-geçiş kanıtı: iç m3u8'ler yalnızca iframe fetch'inden gelebilir.
+        assert md_inner in result
+        assert jw_inner in result
+        # Fetch sırası: ana sayfa, sonra iki bilinen iframe (jwplayer adayı 507
+        # satırında listeye eklenir çünkü ana taramada yakalanmaz).
+        assert fetched == [page_url, md_embed, jw_iframe]
+
+    def test_main_page_fetch_failure_returns_empty(self):
+        # urlopen ana sayfada exception → best-effort → [] (generic sonuca düşülür).
+        with patch.object(
+            ytdlp_engine, "YoutubeDL", _mock_ydl_urlopen({}),
+        ):
+            result = ytdlp_engine._scan_page_for_video_urls(
+                "https://course.example/x", None
+            )
+        assert result == []
+
+    def test_iframe_fetch_failure_keeps_candidate_and_continues(self):
+        # iframe adayı (508-518) fetch'i patlarsa: aday yine de listede kalır
+        # (506-507 fetch'ten ÖNCE eklenir), iç URL eklenmez, fonksiyon çökmez.
+        page_url = "https://course.example/ders-2"
+        jw_iframe = "https://cdn.jwplayer.com/players/broken"
+        main_m3u8 = "https://cdn.host.com/only/main.m3u8"
+        main_html = (
+            f'<iframe src="{jw_iframe}"></iframe>'
+            f'<source src="{main_m3u8}">'
+        )
+        # jw_iframe html_by_url'de YOK → urlopen OSError → except: continue.
+        fetched: list[str] = []
+        with patch.object(
+            ytdlp_engine, "YoutubeDL",
+            _mock_ydl_urlopen({page_url: main_html}, fetched),
+        ):
+            result = ytdlp_engine._scan_page_for_video_urls(page_url, None)
+        assert set(result) == {main_m3u8, jw_iframe}  # aday korunur, iç URL yok
+        assert fetched == [page_url, jw_iframe]  # iframe fetch denendi ve patladı
+
+    def test_ssrf_iframes_rejected_before_fetch(self):
+        # SSRF savunması gerçek akışta:
+        #  1) evil.example: _IFRAME_RE substring ('mediadelivery.net' query'de)
+        #     eşleşir ama parse edilen host bilinen host DEĞİL →
+        #     _is_known_iframe_host False → fetch edilmez.
+        #  2) 127.0.0.1: _IFRAME_RE ('b-cdn.net' query'de) eşleşir ama loopback →
+        #     _safe_discovered_url None → fetch edilmez.
+        page_url = "https://course.example/ders-3"
+        safe_m3u8 = "https://cdn.safe-host.com/ok.m3u8"
+        main_html = (
+            '<iframe src="https://evil.example/embed?ref=mediadelivery.net"></iframe>'
+            '<iframe src="http://127.0.0.1:9000/p?d=b-cdn.net"></iframe>'
+            f'<source src="{safe_m3u8}">'
+        )
+        fetched: list[str] = []
+        with patch.object(
+            ytdlp_engine, "YoutubeDL",
+            _mock_ydl_urlopen({page_url: main_html}, fetched),
+        ):
+            result = ytdlp_engine._scan_page_for_video_urls(page_url, None)
+        assert result == [safe_m3u8]          # yalnız güvenli dış m3u8 kalır
+        assert fetched == [page_url]          # kötü iframe'ler ASLA fetch edilmedi
+
+
+class TestCleanupPartialFiles:
+    """#11 cleanup_partial_files (public, title-önek tabanlı ikinci geçiş)."""
+
+    def test_removes_prefix_matched_leftovers(self, tmp_path):
+        keep_done = tmp_path / "My Video [abc123] 720p.mp4"        # tamam → korunur
+        keep_other = tmp_path / "Other Video [xyz] 720p.mp4.part"  # farklı önek
+        part = tmp_path / "My Video [abc123] 720p.mp4.part"
+        ytdl = tmp_path / "My Video [abc123] 720p.ytdl"
+        frag_aria = tmp_path / "My Video [abc123] 720p.mp4.part-Frag3.aria2"
+        for f in (keep_done, keep_other, part, ytdl, frag_aria):
+            f.write_bytes(b"x")
+        ytdlp_engine.cleanup_partial_files(
+            str(tmp_path), title="My Video", selection="720p"
+        )
+        assert keep_done.exists()   # leftover işareti yok → önek eşleşse de korunur
+        assert keep_other.exists()  # farklı önek → başka indirmenin parçası
+        assert not part.exists()
+        assert not ytdl.exists()
+        assert not frag_aria.exists()
+
+    def test_no_title_is_noop(self, tmp_path):
+        part = tmp_path / "Video [abc] 720p.mp4.part"
+        part.write_bytes(b"x")
+        ytdlp_engine.cleanup_partial_files(
+            str(tmp_path), title=None, selection="720p"
+        )
+        assert part.exists()  # önek bilinmiyor → dokunma
+
+    def test_empty_title_is_noop(self, tmp_path):
+        part = tmp_path / "Video [abc] 720p.mp4.part"
+        part.write_bytes(b"x")
+        ytdlp_engine.cleanup_partial_files(
+            str(tmp_path), title="", selection="720p"
+        )
+        assert part.exists()  # boş title falsy → erken çıkış
+
+
+class TestCleanupArtifactsRetry:
+    """#12 _cleanup_artifacts kilitli-dosya retry döngüsü (gc + backoff + max_wait)."""
+
+    def test_locked_file_retries_gc_and_terminates(self, tmp_path, monkeypatch):
+        import itertools
+        from pathlib import Path
+
+        part = tmp_path / "video [abc123] best.mp4.part"
+        part.write_bytes(b"x")
+
+        # unlink kalıcı olarak başarısız (kilitli dosya simülasyonu).
+        attempts = {"n": 0}
+
+        def _fail_unlink(self, *a, **k):
+            attempts["n"] += 1
+            raise OSError("kilitli")
+
+        monkeypatch.setattr(Path, "unlink", _fail_unlink)
+
+        gc_mock = MagicMock()
+        monkeypatch.setattr(ytdlp_engine.gc, "collect", gc_mock)
+        sleep_mock = MagicMock()
+        monkeypatch.setattr(ytdlp_engine.time, "sleep", sleep_mock)
+        # monotonic'i deterministik yap: deadline'ı birkaç turdan sonra aşsın
+        # (sonsuz sayaç → StopIteration riski yok, sürekli artar → mutlaka biter).
+        counter = itertools.count(100.0, 0.1)
+        monkeypatch.setattr(ytdlp_engine.time, "monotonic", lambda: next(counter))
+
+        # Kalıcı kilit olsa bile fonksiyon max_wait ile sınırlı — takılmamalı.
+        ytdlp_engine._cleanup_artifacts(
+            tmp_path, {"id": "abc123"}, max_wait=0.25
+        )
+
+        assert gc_mock.call_count >= 1   # tutamak serbest bırakma için gc denendi
+        assert attempts["n"] >= 2        # ilk başarısızlıktan sonra yeniden denendi
+        assert sleep_mock.called         # denemeler arası backoff uygulandı
+        assert part.exists()             # silinemedi ama fonksiyon geri döndü
+
+
+class TestDownloadTitle:
+    """#13 download(title=...): outtmpl öneki + cleanup_prefix kullanımı."""
+
+    def test_title_sets_outtmpl_and_returns_final(self, tmp_path):
+        # title dosya-adı-güvenli hale getirilir; '/' → '_'. outtmpl bu öneki taşır.
+        target = tmp_path / "Ders 1_Bölüm 2 [vid] 720p.mp4"
+        captured: dict = {}
+
+        def _fire(opts):
+            captured["opts"] = opts
+            target.write_bytes(b"x")  # nihai dosya diskte var
+            opts["postprocessor_hooks"][0]({
+                "status": "finished",
+                "info_dict": {"filepath": str(target)},
+            })
+
+        with patch.object(ytdlp_engine, "YoutubeDL", _mock_ydl_download(_fire)):
+            result = ytdlp_engine.download(
+                url="https://x/v", selection="720p",
+                download_dir=str(tmp_path), title="Ders 1/Bölüm 2",
+            )
+        # outtmpl: 'safe_title [%(id)s] selection.%(ext)s' — id ve ext yt-dlp'ye kalır.
+        assert captured["opts"]["outtmpl"] == "Ders 1_Bölüm 2 [%(id)s] 720p.%(ext)s"
+        # postprocessor hook'undan yakalanan nihai yol döndürülür (_pp_hook: 740-744).
+        assert result == str(target)
+
+    def test_title_cleanup_prefix_removes_leftover_on_failed_merge(self, tmp_path):
+        # id yakalanmasa bile (yalnız pp hook ateşlendi, progress yok) title öneki
+        # ile çöp parça temizlenir — merge sessizce başarısız olursa (dosya yok).
+        leftover = tmp_path / "Ders 1 [vid99] 480p.mp4.part"
+        unrelated = tmp_path / "Baska [x] 480p.mp4.part"
+        leftover.write_bytes(b"x")
+        unrelated.write_bytes(b"x")
+        missing_final = tmp_path / "Ders 1 [vid99] 480p.mp4"  # diskte YOK
+        captured: dict = {}
+
+        def _fire(opts):
+            captured["opts"] = opts
+            opts["postprocessor_hooks"][0]({
+                "status": "finished",
+                "info_dict": {"filepath": str(missing_final)},
+            })
+
+        with patch.object(ytdlp_engine, "YoutubeDL", _mock_ydl_download(_fire)):
+            with pytest.raises(EngineError):
+                ytdlp_engine.download(
+                    url="https://x/v", selection="480p",
+                    download_dir=str(tmp_path), title="Ders 1",
+                )
+        assert captured["opts"]["outtmpl"] == "Ders 1 [%(id)s] 480p.%(ext)s"
+        assert not leftover.exists()   # cleanup_prefix 'Ders 1 [' ile silindi
+        assert unrelated.exists()      # farklı önek → korunur
+
+
+class TestPlaylistScanMerge:
+    """#16 list_formats playlist dalı + ek-keşfedilen-URL birleşimi."""
+
+    def test_playlist_merges_extra_discovered_urls(self):
+        playlist_info = {
+            "_type": "playlist",
+            "title": "Kurs",
+            "entries": [
+                {**FAKE_INFO, "webpage_url": "https://x/v1", "title": "Ders 1"},
+                {**FAKE_INFO, "webpage_url": "https://x/v2", "title": "Ders 2"},
+            ],
+        }
+        extra_info = {**FAKE_INFO, "title": "Ders 3 (ek)"}
+        ydl_class = MagicMock()
+        ctx = ydl_class.return_value.__enter__.return_value
+        # 1. çağrı: playlist extract. 2. çağrı: _extract_each ek URL.
+        ctx.extract_info.side_effect = [playlist_info, extra_info]
+        extra_url = "https://cdn.b-cdn.net/uuid9/playlist.m3u8"
+        with patch.object(ytdlp_engine, "YoutubeDL", ydl_class), \
+             patch.object(
+                ytdlp_engine, "_scan_page_for_video_urls",
+                return_value=[extra_url],
+             ):
+            scan = list_formats("https://x/playlist")
+        assert scan.type == "playlist"
+        assert scan.playlist_title == "Kurs"
+        assert [e.title for e in scan.entries] == ["Ders 1", "Ders 2", "Ders 3 (ek)"]
+        assert scan.entries[2].url == extra_url  # ek URL girdiye taşındı
+        assert scan.warnings == []
+        # playlist + tek ek URL = 2 extract (entry başına yeniden fetch YOK).
+        assert ctx.extract_info.call_count == 2
+
+    def test_playlist_skips_extra_url_already_in_entries(self):
+        # Ek URL zaten playlist girdisiyle aynıysa dedupe edilir (tekrar fetch yok).
+        playlist_info = {
+            "_type": "playlist",
+            "title": "Kurs",
+            "entries": [
+                {**FAKE_INFO, "webpage_url": "https://x/v1", "title": "Ders 1"},
+                {**FAKE_INFO, "webpage_url": "https://x/v2", "title": "Ders 2"},
+            ],
+        }
+        extra_info = {**FAKE_INFO, "title": "Ders 3"}
+        ydl_class = MagicMock()
+        ctx = ydl_class.return_value.__enter__.return_value
+        ctx.extract_info.side_effect = [playlist_info, extra_info]
+        with patch.object(ytdlp_engine, "YoutubeDL", ydl_class), \
+             patch.object(
+                ytdlp_engine, "_scan_page_for_video_urls",
+                return_value=["https://x/v1", "https://x/v3"],  # v1 → dupe
+             ):
+            scan = list_formats("https://x/playlist")
+        assert len(scan.entries) == 3       # 2 playlist + 1 gerçek ek (v3)
+        assert scan.entries[2].url == "https://x/v3"
+        # v1 zaten girdide → tekrar extract edilmez: playlist + v3 = 2 çağrı.
+        assert ctx.extract_info.call_count == 2
+
+
+class TestExtractEachMore:
+    """#36 generic-title değişimi + #39 cookies/referer opsiyonları."""
+
+    def test_generic_titles_renamed_to_video_n(self):
+        # 'playlist'/'index'/boş/None → 'Video N'; gerçek başlık korunur.
+        ydl_class = MagicMock()
+        ctx = ydl_class.return_value.__enter__.return_value
+        ctx.extract_info.side_effect = [
+            {**FAKE_INFO, "title": "playlist"},   # → Video 1
+            {**FAKE_INFO, "title": "INDEX"},      # case-insensitive → Video 2
+            {**FAKE_INFO, "title": None},         # None → "" → Video 3
+            {**FAKE_INFO, "title": "Gerçek Ders"},  # korunur
+        ]
+        with patch.object(ytdlp_engine, "YoutubeDL", ydl_class):
+            entries, warnings = ytdlp_engine._extract_each(
+                ["https://a", "https://b", "https://c", "https://d"],
+                browser=None, referer="https://page",
+            )
+        assert [e.title for e in entries] == [
+            "Video 1", "Video 2", "Video 3", "Gerçek Ders",
+        ]
+        assert [e.url for e in entries] == [
+            "https://a", "https://b", "https://c", "https://d",
+        ]
+        assert warnings == []
+
+    def test_browser_adds_cookies_and_referer_header(self):
+        ydl = _mock_ydl({**FAKE_INFO, "title": "V"})
+        with patch.object(ytdlp_engine, "YoutubeDL", ydl):
+            entries, warnings = ytdlp_engine._extract_each(
+                ["https://x/v"], browser="firefox", referer="https://page/",
+            )
+        opts = ydl.call_args[0][0]
+        assert opts["cookiesfrombrowser"] == ("firefox",)
+        assert opts["http_headers"]["Referer"] == "https://page/"
+        assert opts["skip_download"] is True
+        assert len(entries) == 1
+
+    def test_no_browser_omits_cookies_but_keeps_referer(self):
+        ydl = _mock_ydl({**FAKE_INFO, "title": "V"})
+        with patch.object(ytdlp_engine, "YoutubeDL", ydl):
+            ytdlp_engine._extract_each(
+                ["https://x/v"], browser=None, referer="https://p/",
+            )
+        opts = ydl.call_args[0][0]
+        assert "cookiesfrombrowser" not in opts
+        assert opts["http_headers"]["Referer"] == "https://p/"
+
+
+class TestUrlDedupKey:
+    """_url_dedup_key: host+path'e indirger; parse hatasında orijinali döndürür."""
+
+    def test_strips_query_fragment_and_lowercases_host(self):
+        key = ytdlp_engine._url_dedup_key(
+            "HTTPS://CDN.Example.COM/Path/x?a=1&b=2#frag"
+        )
+        # scheme+host küçük harf; path olduğu gibi; query/fragment atılır.
+        assert key == "https://cdn.example.com/Path/x"
+
+    def test_invalid_ipv6_url_returns_original(self):
+        # Kapanmamış IPv6 parantezi → urlsplit ValueError → orijinal aynen döner.
+        bad = "http://[::1"
+        assert ytdlp_engine._url_dedup_key(bad) == bad
+
+
+class TestResolvesToInternal:
+    """_resolves_to_internal: geçersiz addrinfo atlanır; iç adres tespit edilir."""
+
+    def test_skips_unparseable_addr_then_detects_loopback(self, monkeypatch):
+        # İlk addrinfo geçersiz IP (ValueError) → atlanır; ikinci loopback → True.
+        monkeypatch.setattr(
+            ytdlp_engine, "_resolve_host",
+            lambda host, *a, **k: [
+                (2, 1, 6, "", ("not-an-ip", 0)),
+                (2, 1, 6, "", ("127.0.0.1", 0)),
+            ],
+        )
+        assert ytdlp_engine._resolves_to_internal("evil.example") is True
+
+    def test_skips_malformed_tuple_then_detects_linklocal(self, monkeypatch):
+        # info[4] boş tuple → IndexError → atlanır; ikinci link-local → True.
+        monkeypatch.setattr(
+            ytdlp_engine, "_resolve_host",
+            lambda host, *a, **k: [
+                (2, 1, 6, "", ()),
+                (2, 1, 6, "", ("169.254.10.20", 0)),
+            ],
+        )
+        assert ytdlp_engine._resolves_to_internal("evil.example") is True
+
+    def test_public_addr_is_not_internal(self, monkeypatch):
+        monkeypatch.setattr(
+            ytdlp_engine, "_resolve_host",
+            lambda host, *a, **k: [(2, 1, 6, "", ("93.184.216.34", 0))],
+        )
+        assert ytdlp_engine._resolves_to_internal("ok.example") is False
+
+    def test_resolution_failure_fails_open(self, monkeypatch):
+        # DNS hatası → False (fail-open): geçici hata geçerli URL'yi reddetmez.
+        def _boom(host, *a, **k):
+            raise OSError("dns down")
+        monkeypatch.setattr(ytdlp_engine, "_resolve_host", _boom)
+        assert ytdlp_engine._resolves_to_internal("whatever.example") is False
