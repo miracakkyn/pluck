@@ -376,6 +376,22 @@ select.text-input { cursor: pointer; }
   padding: 9px 12px;
 }
 
+/* Çoklu-video tarama uyarıları + canlı bağlantı durumu (kehribar/uyarı tonu). */
+.warnings,
+.stream-status {
+  color: var(--warning);
+  font-size: 13px;
+  background: rgba(251, 191, 36, 0.08);
+  border: 1px solid rgba(251, 191, 36, 0.25);
+  border-radius: var(--radius-sm);
+  padding: 9px 12px;
+}
+.warnings { margin-top: 12px; }
+.warnings strong { display: block; margin-bottom: 4px; font-weight: 600; }
+.warnings ul { margin: 0; padding-left: 18px; }
+.warnings li { margin: 2px 0; word-break: break-all; }
+.stream-status { margin: 4px 0 8px; }
+
 /* --- duyarlı --- */
 @media (max-width: 620px) {
   .url-row { flex-direction: column; }

@@ -31,13 +31,26 @@ function detailText(detail) {
 }
 
 /** Ortak JSON API çağrısı; hata durumunda anlamlı Error fırlatır. */
-async function api(method, path, body) {
-  const opts = { method, headers: { "X-Pluck-Token": PLUCK_TOKEN } };
+async function api(method, path, body, timeoutMs = 120000) {
+  const opts = {
+    method,
+    headers: { "X-Pluck-Token": PLUCK_TOKEN },
+    signal: AbortSignal.timeout(timeoutMs),
+  };
   if (body !== undefined) {
     opts.headers["Content-Type"] = "application/json";
     opts.body = JSON.stringify(body);
   }
-  const res = await fetch(path, opts);
+  let res;
+  try {
+    res = await fetch(path, opts);
+  } catch (err) {
+    // Zaman aşımı veya bağlantı hatası — asılı kalma yerine anlamlı hata ver.
+    if (err && err.name === "TimeoutError") {
+      throw new Error(`İstek zaman aşımına uğradı (${timeoutMs / 1000}sn).`);
+    }
+    throw new Error(err && err.message ? err.message : "Bağlantı hatası");
+  }
   const data = await res.json().catch(() => null);
   if (!res.ok) {
     throw new Error(data ? detailText(data.detail) : `Sunucu hatası (${res.status})`);
@@ -144,6 +157,10 @@ async function pickFolder() {
       $("#download-dir").value = result.path;
     } else if (result?.error) {
       showError($("#video-error"), result.error);
+    } else if (!result) {
+      // waitForPickResult zaman aşımına uğradı — sessiz kalma.
+      showError($("#video-error"),
+        "Klasör seçimi zaman aşımına uğradı. Yolu elle yazabilirsiniz.");
     }
   } catch (err) {
     showError($("#video-error"), `Klasör seçilemedi: ${err.message}`);
@@ -171,6 +188,11 @@ async function waitForPickResult(timeoutMs = 120000) {
 
 // --- format getirme -----------------------------------------------------
 
+// fetchFormats birden çok kez tetiklenebilir (buton, Enter tekrarı). Yeniden-
+// giriş koruması olmadan yavaş bir yanıt yenisini ezebilir; sıra numarasıyla
+// yalnızca EN SON getirme DOM'u günceller (bkz. scanPage/#28 ile aynı desen).
+let fetchSeq = 0;
+
 async function fetchFormats() {
   const url = $("#url").value.trim();
   clearError($("#compose-error"));
@@ -178,23 +200,54 @@ async function fetchFormats() {
     showError($("#compose-error"), "Önce bir video bağlantısı girin.");
     return;
   }
+  const seq = ++fetchSeq;
   const btn = $("#fetch-btn");
   btn.disabled = true;
   btn.textContent = "Getiriliyor…";
   try {
     const browser = $("#browser").value || null;
-    currentScan = await api("POST", "/api/formats", { url, browser });
+    const scan = await api("POST", "/api/formats", { url, browser });
+    if (seq !== fetchSeq) return;  // daha yeni bir getirme başladı — bayat sonucu at
+    currentScan = scan;
     if (currentScan.type === "playlist") {
       renderPlaylist(currentScan);
     } else {
       renderVideo(currentScan.video);
     }
+    renderWarnings(currentScan.warnings || []);
   } catch (err) {
+    if (seq !== fetchSeq) return;  // bayat hata — daha yeni getirme sürüyor
     showError($("#compose-error"), err.message);
   } finally {
-    btn.disabled = false;
-    btn.textContent = "Formatları getir";
+    if (seq === fetchSeq) {
+      btn.disabled = false;
+      btn.textContent = "Formatları getir";
+    }
   }
+}
+
+/** Çoklu-video taramada çözümlenemeyen URL uyarılarını gösterir; boşsa gizler.
+ *  Backend `warnings[]` gönderir (sessiz başarısızlığı önlemek için) — web
+ *  arayüzü bunları eskiden hiç göstermiyordu. */
+function renderWarnings(warnings) {
+  const box = $("#video-warnings");
+  if (!warnings.length) {
+    box.hidden = true;
+    box.replaceChildren();
+    return;
+  }
+  box.replaceChildren();
+  const title = document.createElement("strong");
+  title.textContent = `${warnings.length} video çözümlenemedi:`;
+  box.appendChild(title);
+  const ul = document.createElement("ul");
+  for (const w of warnings) {
+    const li = document.createElement("li");
+    li.textContent = w;
+    ul.appendChild(li);
+  }
+  box.appendChild(ul);
+  box.hidden = false;
 }
 
 function renderVideo(video) {
@@ -407,13 +460,23 @@ function flashAdded() {
 function connectEventStream() {
   const source = new EventSource("/api/events");
   source.onmessage = (event) => {
+    setStreamStatus(true);
     try {
       renderQueue(JSON.parse(event.data));
     } catch {
       /* bozuk çerçeve yok sayılır */
     }
   };
-  // Bağlantı koparsa tarayıcı otomatik yeniden bağlanır.
+  source.onopen = () => setStreamStatus(true);
+  // Bağlantı koparsa tarayıcı otomatik yeniden bağlanır; kullanıcıya durumu
+  // bildir (aksi halde kuyruk sessizce donar ve donduğu anlaşılmaz).
+  source.onerror = () => setStreamStatus(false);
+}
+
+/** Canlı SSE bağlantı durumunu kullanıcıya gösterir (kesildiyse uyarı satırı). */
+function setStreamStatus(connected) {
+  const el = $("#stream-status");
+  if (el) el.hidden = connected;
 }
 
 const jobElements = new Map();
@@ -508,10 +571,12 @@ async function cancelJob(jobId) {
 }
 
 async function clearFinishedJobs() {
+  // Kullanıcının açık eylemi: başarısız olursa (ağ/sunucu hatası) sessiz kalma,
+  // aksi halde "temizle"ye basıp hiçbir şey olmaması kafa karıştırır.
   try {
     await api("POST", "/api/jobs/clear");
-  } catch {
-    /* önemsiz; bir sonraki SSE çerçevesi yine güncel listeyi gönderir */
+  } catch (err) {
+    showError($("#video-error"), `Kuyruk temizlenemedi: ${err.message}`);
   }
 }
 

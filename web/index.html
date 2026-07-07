@@ -51,6 +51,9 @@
         </div>
       </div>
 
+      <!-- Çoklu-video taramada çözümlenemeyen URL'ler (sessiz hatayı önler) -->
+      <div class="warnings" id="video-warnings" role="status" hidden></div>
+
       <div class="field">
         <span class="field-label">Kalite</span>
         <div class="preset-row" id="preset-row" role="group" aria-label="Kalite seçimi"></div>
@@ -97,8 +100,13 @@
         <button type="button" id="clear-queue-btn" class="btn-text"
                 title="Tamamlanmış/iptal/hatalı işleri kuyruktan kaldır">Bitenleri temizle</button>
       </div>
+      <p class="stream-status" id="stream-status" role="status" hidden>
+        Canlı bağlantı kesildi — yeniden deneniyor…
+      </p>
       <p class="queue-empty" id="queue-empty">Henüz iş yok. Bir bağlantı ekleyin.</p>
-      <ul class="queue" id="queue" aria-live="polite"></ul>
+      <!-- aria-live yok: ilerleme her 0.5sn güncellenir; sürekli seslendirme
+           ekran okuyucuyu boğar. Durum değişimleri #stream-status ile bildirilir. -->
+      <ul class="queue" id="queue"></ul>
     </section>
   </main>
 
