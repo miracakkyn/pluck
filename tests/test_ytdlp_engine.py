@@ -79,6 +79,30 @@ def _mock_ydl_download(on_download):
     return _FakeYDL
 
 
+class TestAria2cOptions:
+    """aria2c argümanlarının geçerliliği — canlı çöküşleri önler."""
+
+    def test_min_split_size_within_aria2c_range(self):
+        # aria2c -k (min-split-size) 1MiB–1GiB aralığında OLMALI; altında
+        # (ör. 256K) "code 28: min-split-size must be between 1048576 and
+        # 1073741824" ile çöker. Bu test o hatayı bir daha getirmez.
+        args = ytdlp_engine._aria2c_download_options()[
+            "external_downloader_args"]["aria2c"]
+        k_val = None
+        for i, arg in enumerate(args):
+            if arg == "-k" and i + 1 < len(args):
+                k_val = args[i + 1]
+            elif arg.startswith("-k") and len(arg) > 2:
+                k_val = arg[2:]
+        assert k_val is not None, "aria2c -k (min-split-size) tanımlı olmalı"
+        unit = k_val[-1].upper()
+        mult = {"K": 1024, "M": 1024 ** 2, "G": 1024 ** 3}.get(unit, 1)
+        num = int(k_val[:-1]) if unit in ("K", "M", "G") else int(k_val)
+        size = num * mult
+        assert 1048576 <= size <= 1073741824, \
+            f"aria2c -k {k_val} ({size} B) geçerli aralık dışında → code 28"
+
+
 class TestBuildFormatSelector:
     def test_best_prefers_compatible_mp4(self):
         sel = build_format_selector("best")

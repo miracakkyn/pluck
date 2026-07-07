@@ -62,9 +62,11 @@ def _aria2c_download_options() -> dict:
         "external_downloader_args": {
             "aria2c": [
                 "-x16", "-s16",
-                # min split size verilmezse aria2c default 20MB; küçük HLS
-                # fragment'lerini de bölmesi için 256K'ya indir.
-                "-k256K",
+                # min split size: aria2c bunu 1MiB–1GiB aralığında ister; altında
+                # (ör. 256K) "code 28: min-split-size must be between 1048576 and
+                # 1073741824" ile ÇÖKER. Default 20MB'dan küçük parçaların da
+                # bölünmesi için izin verilen EN DÜŞÜK değeri (1MiB) kullan.
+                "-k1M",
                 "--summary-interval=0",
                 "--console-log-level=warn",
                 "--max-tries=3",
