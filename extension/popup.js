@@ -94,7 +94,10 @@ function clearWarnings() { renderWarnings([]); }
 // --- motor iletişimi ----------------------------------------------------
 
 async function api(method, path, body, timeoutMs = 120000) {
-  const opts = { method, headers: {}, signal: AbortSignal.timeout(timeoutMs) };
+  const opts = {
+    method, headers: { ...pluckHeaders() },
+    signal: AbortSignal.timeout(timeoutMs),
+  };
   if (body !== undefined) {
     opts.headers["Content-Type"] = "application/json";
     opts.body = JSON.stringify(body);
@@ -120,6 +123,7 @@ async function findHelper() {
   for (const port of HELPER_PORTS) {
     try {
       const res = await fetch(`http://127.0.0.1:${port}/api/config`, {
+        headers: pluckHeaders(),
         signal: AbortSignal.timeout(800),
       });
       if (res.ok) {

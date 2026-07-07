@@ -10,9 +10,9 @@ import logging
 import sys
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from app import config, ytdlp_engine
@@ -49,8 +49,34 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(title="Pluck", lifespan=lifespan)
 
+# Paylaşımlı jeton koruması. /api/* uçları (SSE hariç) X-Pluck-Token başlığında
+# doğru jetonu ister; eklenti (pluck-token.js) ve web arayüzü (app.js) aynı
+# sabiti gönderir. Amaç: rastgele diğer yerel eklenti/yazılımın API'yi
+# kullanmasını engellemek. NOT: bu middleware CORS'tan ÖNCE eklenir ki CORS DIŞTA
+# kalsın — böylece OPTIONS preflight'ı jeton kontrolüne girmeden yanıtlanır.
+# SSE (/api/events) hariç: EventSource özel başlık gönderemez ve yalnızca
+# ilerleme okur. GET /, /static ve /api/events jetonsuz erişilebilir.
+_TOKEN_EXEMPT = frozenset({"/api/events"})
+
+
+@app.middleware("http")
+async def _require_token(request: Request, call_next):
+    path = request.url.path
+    needs_token = (
+        path.startswith("/api/")
+        and path not in _TOKEN_EXEMPT
+        and request.method != "OPTIONS"  # preflight'ı CORS yanıtlar
+    )
+    if needs_token and request.headers.get("x-pluck-token") != config.api_token():
+        return JSONResponse(
+            {"detail": "Geçersiz veya eksik jeton"}, status_code=403
+        )
+    return await call_next(request)
+
+
 # Chrome eklentisinin (chrome-extension://) yerel motora erişebilmesi için.
 # Yalnızca eklenti kaynakları yanıtı okuyabilir; rastgele web siteleri okuyamaz.
+# (Son eklenen middleware EN DIŞTADIR — CORS burada, jeton kontrolünün dışında.)
 app.add_middleware(
     CORSMiddleware,
     allow_origin_regex=r"chrome-extension://.*",

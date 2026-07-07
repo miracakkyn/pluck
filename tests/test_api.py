@@ -3,11 +3,14 @@ from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
 
+from app import config
 from app.main import app
 from app.models import FormatInfo, FormatsResponse, ScanResponse
 from app.ytdlp_engine import EngineError
 
-client = TestClient(app)
+# /api/* uçları paylaşımlı jeton ister; test istemcisi doğru başlığı gönderir.
+_TOKEN_HDR = {"X-Pluck-Token": config.api_token()}
+client = TestClient(app, headers=_TOKEN_HDR)
 
 FAKE_RESPONSE = ScanResponse(
     type="video",
@@ -30,6 +33,20 @@ def test_get_config():
     assert "default_download_dir" in data
     assert "chrome" in data["browsers"]
     assert "best" in data["presets"]
+
+
+def test_missing_token_is_403():
+    # Jeton başlığı olmayan (Pluck olmayan) istemci /api/* uçlarına erişemez.
+    bare = TestClient(app)
+    assert bare.get("/api/config").status_code == 403
+    assert bare.post(
+        "/api/formats", json={"url": "https://x/v"}
+    ).status_code == 403
+
+
+def test_wrong_token_is_403():
+    bad = TestClient(app, headers={"X-Pluck-Token": "yanlis"})
+    assert bad.get("/api/config").status_code == 403
 
 
 def test_post_formats_success():
@@ -111,7 +128,7 @@ def test_delete_queued_job_cancels_it(tmp_path):
 
 def test_lifespan_starts_and_stops_worker_cleanly():
     # `with` bloğu lifespan başlangıç/bitişini (worker start/stop) tetikler.
-    with TestClient(app) as managed:
+    with TestClient(app, headers=_TOKEN_HDR) as managed:
         assert managed.get("/api/config").status_code == 200
 
 

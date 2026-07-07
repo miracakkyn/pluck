@@ -1,14 +1,16 @@
 "use strict";
 /* Pluck — sayfa-içi içerik script.
-   1. Sayfadaki <video> elementlerini bulur, her birinin sağ-üst köşesine
-      Shadow DOM içinde küçük bir "Pluck ile indir" rozeti yerleştirir.
+   1. Sayfadaki <video>/oynatıcı elementlerini bulur, her birinin sağ-üst
+      köşesine Shadow DOM içinde küçük bir "Pluck ile indir" rozeti yerleştirir.
       Rozete tıklayınca kalite menüsü (popover) açılır; seçilen kalite ile
-      yerel motora indirme isteği gönderilir.
-   2. DOM'dan ve bilinen global player API'lerinden (JWPlayer, Video.js) medya
-      URL'lerini toplayıp background service worker'a yollar.
-   3. chrome.storage.local'daki `badgesEnabled` bayrağı false ise rozetler
+      yerel motora indirme isteği gönderilir (background → /api/jobs).
+   2. chrome.storage.local'daki `badgesEnabled` bayrağı false ise rozetler
       gizlenir; popup'tan toggle ile değiştirilince anında uygulanır.
-   manifest content_scripts ile her sayfada otomatik inject olur. */
+   manifest content_scripts ile her sayfada otomatik inject olur.
+
+   NOT (Sprint 15): Eski DOM_URLS/global-player URL toplama kaldırıldı — popup
+   onu hiç tüketmiyordu (yetim boru hattı). Rozet, indirilecek URL'yi doğrudan
+   hedeften (currentSrc/src/iframe.src/sayfa) alır. */
 
 (function pluckContentScript() {
   // Idempotent inject: hem manifest hem programatik tetiklenirse iki kez girme.
@@ -34,7 +36,6 @@
   ];
 
   const badges = new Map(); // hedef element -> { host, badge, popover, ... }
-  const collectedUrls = new Set();
   let badgesEnabled = true; // varsayılan açık; storage'den okunup güncellenir
 
   // Hangi iframe host'larının video oynatıcı olduğunu bildiğimiz liste.
@@ -72,47 +73,6 @@
       if (source.src) urls.push(source.src);
     }
     return urls;
-  }
-
-  function collectGlobalPlayerUrls() {
-    const urls = [];
-    try {
-      if (typeof window.jwplayer === "function") {
-        const inst = window.jwplayer();
-        if (inst && typeof inst.getPlaylist === "function") {
-          for (const item of inst.getPlaylist() || []) {
-            if (item.file) urls.push(item.file);
-            for (const s of item.sources || []) if (s.file) urls.push(s.file);
-          }
-        }
-      }
-    } catch { /* JWPlayer yok — yok say */ }
-    try {
-      if (window.videojs && typeof window.videojs.getAllPlayers === "function") {
-        for (const p of window.videojs.getAllPlayers()) {
-          if (typeof p.currentSrc === "function") {
-            const src = p.currentSrc();
-            if (src) urls.push(src);
-          }
-        }
-      }
-    } catch { /* Video.js yok — yok say */ }
-    return urls;
-  }
-
-  function reportUrls(rawUrls) {
-    const fresh = [];
-    for (const u of rawUrls) {
-      if (typeof u !== "string") continue;
-      if (!/^https?:/i.test(u)) continue;
-      if (collectedUrls.has(u)) continue;
-      collectedUrls.add(u);
-      fresh.push(u);
-    }
-    if (!fresh.length) return;
-    try {
-      chrome.runtime.sendMessage({ type: "DOM_URLS", urls: fresh });
-    } catch { /* background uyumayabilir; periyodik tarama yine dener */ }
   }
 
   // --- rozet + popover ---------------------------------------------------
@@ -392,7 +352,6 @@
     // 1) <video> tag'leri — en güvenilir hedef.
     for (const v of document.querySelectorAll("video")) {
       buildBadge(v);
-      reportUrls(collectVideoSources(v));
     }
     // 2) Bilinen video iframe host'ları — Bunny Stream, Vimeo, YouTube embed
     //    gibi içinde kendi <video> tag'ini render eden ama iframe sınırı
@@ -400,7 +359,6 @@
     for (const f of document.querySelectorAll("iframe")) {
       if (f.src && VIDEO_IFRAME_HOST_RE.test(f.src)) {
         buildBadge(f);
-        reportUrls([f.src]);
       }
     }
     // 3) Player-benzeri container heuristic — Ders-1 gibi <video>/<iframe>
@@ -416,7 +374,6 @@
       if (ar < 1.0 || ar > 2.8) continue;
       buildBadge(c);
     }
-    reportUrls(collectGlobalPlayerUrls());
   }
 
   loadBadgesEnabled();

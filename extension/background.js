@@ -1,77 +1,15 @@
 "use strict";
+importScripts("pluck-token.js");  // PLUCK_TOKEN + pluckHeaders() (classic SW)
 /* Pluck — MV3 service worker.
-   Sayfalardaki ağ trafiğini gözleyip medya URL'lerini (m3u8/mpd/mp4) sekme
-   bazında toplar. Popup açıldığında content script DOM'dan topladığını da
-   ekler; ikisi birlikte yt-dlp'nin sayfa fetch'iyle yakalayamadığı kaynakları
-   tamamlar (bkz. DESIGN.md §16.2).
-   Ayrıca content script overlay rozetinden gelen "şu URL'yi indir" mesajını
-   alıp yerel motora (FastAPI) /api/jobs isteği gönderir. */
+   Content script overlay rozetinden gelen "şu URL'yi indir" mesajını alıp
+   yerel motora (FastAPI) /api/jobs isteği gönderir.
+
+   NOT (Sprint 15): Eski webRequest/DOM_URLS sniffing boru hattı kaldırıldı —
+   popup onu hiç tüketmiyordu (yetim koddu). Rozet indirmesi target.src /
+   window.location.href'i doğrudan kullanır; bu SW yalnızca o mesajı motora
+   iletir. Böylece `webRequest` izni ve `<all_urls>` host izni de gerekmez. */
 
 const HELPER_PORTS = [8765, 8766, 8767, 8768, 8769, 8770];
-const MEDIA_EXT_RE = /\.(m3u8|mpd|mp4|m4s)(?:$|\?)/i;
-
-// MV3 service worker uyuyabilir; tabUrls Map kalıcılık değil sadece hızlı
-// erişim için. Kalıcılık chrome.storage.session ile sağlanır (chrome 102+).
-const tabUrls = new Map(); // tabId -> Set<url>
-
-function addUrl(tabId, url) {
-  if (typeof tabId !== "number" || tabId < 0) return;
-  if (!url || typeof url !== "string") return;
-  let set = tabUrls.get(tabId);
-  if (!set) {
-    set = new Set();
-    tabUrls.set(tabId, set);
-  }
-  if (!set.has(url)) {
-    set.add(url);
-    persistTab(tabId, set);
-  }
-}
-
-function persistTab(tabId, set) {
-  // chrome.storage.session worker yeniden başlasa da hayatta kalır.
-  try {
-    chrome.storage.session.set({ [`tab_${tabId}`]: [...set] });
-  } catch {
-    /* tarayıcı oturum API'sini desteklemiyor — sorun değil, RAM yedek */
-  }
-}
-
-async function restoreTab(tabId) {
-  try {
-    const data = await chrome.storage.session.get(`tab_${tabId}`);
-    const urls = data[`tab_${tabId}`];
-    if (Array.isArray(urls)) {
-      tabUrls.set(tabId, new Set(urls));
-    }
-  } catch {
-    /* yok say */
-  }
-}
-
-chrome.webRequest.onResponseStarted.addListener(
-  ({ tabId, url }) => {
-    if (MEDIA_EXT_RE.test(url)) addUrl(tabId, url);
-  },
-  { urls: ["<all_urls>"], types: ["xmlhttprequest", "media", "other"] },
-);
-
-chrome.tabs.onRemoved.addListener((tabId) => {
-  tabUrls.delete(tabId);
-  try { chrome.storage.session.remove(`tab_${tabId}`); } catch {}
-});
-
-// Yeni navigasyon: önceki sayfanın URL'leri artık alakasız.
-// `webNavigation` izni manifest'te yoksa `chrome.webNavigation` undefined olur;
-// `?.` namespace'in KENDİSİNİ korur — aksi halde SW yüklenirken TypeError atar,
-// üst-seviye yürütme durur ve aşağıdaki onMessage listener'ı HİÇ kaydolmaz
-// (rozet indirmesi "Receiving end does not exist" ile ölür).
-chrome.webNavigation?.onBeforeNavigate?.addListener((details) => {
-  if (details.frameId === 0) {
-    tabUrls.delete(details.tabId);
-    try { chrome.storage.session.remove(`tab_${details.tabId}`); } catch {}
-  }
-});
 
 // --- Yerel motor iletişimi (rozet tıklamasıyla doğrudan indir) ------------
 
@@ -83,7 +21,8 @@ async function findHelper() {
     // Doğrula — motor yeniden başlatılmış olabilir; başarısızsa yeniden ara.
     try {
       const r = await fetch(`${cachedHelperBase}/api/config`,
-                            { signal: AbortSignal.timeout(800) });
+                            { headers: pluckHeaders(),
+                              signal: AbortSignal.timeout(800) });
       if (r.ok) {
         cachedHelperConfig = await r.json();
         return cachedHelperBase;
@@ -95,7 +34,8 @@ async function findHelper() {
   for (const port of HELPER_PORTS) {
     try {
       const r = await fetch(`http://127.0.0.1:${port}/api/config`,
-                            { signal: AbortSignal.timeout(800) });
+                            { headers: pluckHeaders(),
+                              signal: AbortSignal.timeout(800) });
       if (r.ok) {
         cachedHelperBase = `http://127.0.0.1:${port}`;
         cachedHelperConfig = await r.json();
@@ -146,7 +86,7 @@ async function downloadUrl(url, selection, referer) {
   try {
     const res = await fetch(`${base}/api/jobs`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...pluckHeaders() },
       body: JSON.stringify(body),
     });
     if (!res.ok) {
@@ -160,22 +100,6 @@ async function downloadUrl(url, selection, referer) {
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-  // Popup → "bu sekme için toplanmış URL'leri ver"
-  if (msg && msg.type === "GET_TAB_URLS" && typeof msg.tabId === "number") {
-    (async () => {
-      if (!tabUrls.has(msg.tabId)) await restoreTab(msg.tabId);
-      sendResponse({ urls: [...(tabUrls.get(msg.tabId) || [])] });
-    })();
-    return true; // async response
-  }
-  // Content script → "DOM'da bu URL'leri buldum, sekmeye ekle"
-  if (msg && msg.type === "DOM_URLS" && Array.isArray(msg.urls)) {
-    const tabId = sender.tab && sender.tab.id;
-    if (typeof tabId === "number") {
-      for (const u of msg.urls) addUrl(tabId, u);
-    }
-    return;
-  }
   // Content script overlay rozeti → "şu URL'yi indir"
   if (msg && msg.type === "DOWNLOAD_URL" && typeof msg.url === "string") {
     downloadUrl(msg.url, msg.selection, msg.referer).then(sendResponse);

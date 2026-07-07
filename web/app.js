@@ -6,6 +6,12 @@
 
 const $ = (sel) => document.querySelector(sel);
 
+// Yerel API paylaşımlı jetonu — motorun config.api_token() varsayılanı ve
+// extension/pluck-token.js ile BİREBİR eşleşmelidir. /api/* uçları bunu
+// X-Pluck-Token başlığında ister (SSE hariç). Motorda PLUCK_TOKEN ortam
+// değişkeni ayarlanırsa bu sabiti de güncelleyin.
+const PLUCK_TOKEN = "pluck-local-v1-a3f19c7e";
+
 const PRESET_LABELS = {
   best: "En yüksek",
   "1080p": "1080p",
@@ -26,7 +32,7 @@ function detailText(detail) {
 
 /** Ortak JSON API çağrısı; hata durumunda anlamlı Error fırlatır. */
 async function api(method, path, body) {
-  const opts = { method, headers: {} };
+  const opts = { method, headers: { "X-Pluck-Token": PLUCK_TOKEN } };
   if (body !== undefined) {
     opts.headers["Content-Type"] = "application/json";
     opts.body = JSON.stringify(body);

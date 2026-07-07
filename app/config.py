@@ -5,11 +5,25 @@ böylece kod Windows ve macOS'ta birebir aynı çalışır.
 """
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
 HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
+
+# Yerel API paylaşımlı jetonu — Pluck'ın kendi istemcilerini (tarayıcı eklentisi
+# + web arayüzü) rastgele diğer yerel eklenti/yazılımdan ayırır. Sabit, repo'da
+# gömülü bir paylaşımlı sırdır: fırsatçı localhost-tarayan bir eklenti bu başlığı
+# göndermez → 403. Hedefli (repo'yu okuyan) saldırgana karşı değil; onun için
+# PLUCK_TOKEN ortam değişkeniyle değiştirin (o durumda extension/pluck-token.js
+# ve web/app.js içindeki sabiti de EŞLEŞTİRİN). Bkz. DESIGN.md §16.
+_DEFAULT_API_TOKEN = "pluck-local-v1-a3f19c7e"
+
+
+def api_token() -> str:
+    """Beklenen X-Pluck-Token değeri (ortam değişkeniyle geçersiz kılınabilir)."""
+    return os.environ.get("PLUCK_TOKEN") or _DEFAULT_API_TOKEN
 
 # SSE anlık görüntü aralığı (saniye).
 EVENT_INTERVAL = 0.5
