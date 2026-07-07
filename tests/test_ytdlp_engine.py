@@ -13,6 +13,15 @@ def _ffmpeg_present(monkeypatch):
     """Test ortamında ffmpeg PATH'te olmayabilir; mock indirme yolu için sahte var."""
     monkeypatch.setattr(ytdlp_engine, "_FFMPEG_AVAILABLE", True)
 
+
+@pytest.fixture(autouse=True)
+def _offline_dns(monkeypatch):
+    """Testlerde gerçek DNS yapma. _safe_discovered_url'in rebinding kontrolü
+    varsayılan fail-open olur (çözülemedi → engelleme); rebinding testi override eder."""
+    def _no_dns(host, *args, **kwargs):
+        raise OSError("offline test")
+    monkeypatch.setattr(ytdlp_engine, "_resolve_host", _no_dns)
+
 FAKE_INFO = {
     "title": "Test Video",
     "duration": 120.0,
@@ -609,6 +618,22 @@ class TestVideoUrlPatterns:
             "https://iframe.mediadelivery.net/embed/1/abc") is True
         assert ytdlp_engine._is_known_iframe_host(
             "http://127.0.0.1:9000/x?d=mediadelivery.net") is False
+
+    def test_dns_rebinding_domain_rejected(self, monkeypatch):
+        # Alan adı loopback'e çözülürse keşfedilen URL reddedilir (DNS rebinding);
+        # public IP'ye çözülürse geçer.
+        monkeypatch.setattr(
+            ytdlp_engine, "_resolve_host",
+            lambda host, *a, **k: [(2, 1, 6, "", ("127.0.0.1", 0))],
+        )
+        assert ytdlp_engine._safe_discovered_url(
+            "https://evil.example/x.m3u8") is None
+        monkeypatch.setattr(
+            ytdlp_engine, "_resolve_host",
+            lambda host, *a, **k: [(2, 1, 6, "", ("93.184.216.34", 0))],
+        )
+        assert ytdlp_engine._safe_discovered_url(
+            "https://ok.example/x.m3u8") == "https://ok.example/x.m3u8"
 
 
 class TestExtractEach:

@@ -264,7 +264,14 @@ function hideAllModes() {
   setHidden("#playlist-controls", true);
 }
 
+// scanPage() birden çok kez tetiklenebilir (boot, yeniden-tara butonu, tarayıcı
+// değişimi). Yeniden-giriş koruması olmadan yavaş bir yanıt, sonradan başlayan
+// daha yeni bir taramanın sonucunu ezebilir. Her tarama bir sıra numarası alır;
+// yalnızca EN SON tarama DOM'u günceller.
+let scanSeq = 0;
+
 async function scanPage() {
+  const seq = ++scanSeq;
   clearError();
   clearWarnings();
   hideAllModes();
@@ -282,6 +289,7 @@ async function scanPage() {
     // generic extractor'ın atladıklarını da yakalıyor. Content script + web
     // Request taraması overlay rozeti için kullanılır (background → /api/jobs).
     const scan = await api("POST", "/api/formats", { url: pageUrl, browser });
+    if (seq !== scanSeq) return;  // daha yeni bir tarama başladı — bayat sonucu at
     currentScan = scan;
     if (scan.type === "playlist") {
       renderPlaylist(scan);
@@ -290,6 +298,7 @@ async function scanPage() {
     }
     renderWarnings(scan.warnings || []);
   } catch (err) {
+    if (seq !== scanSeq) return;  // bayat hata — daha yeni tarama sürüyor
     $("#video-title").textContent = "Video bulunamadı";
     $("#video-sub").textContent = "";
     showError(err.message || "Bilinmeyen hata");

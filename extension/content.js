@@ -222,6 +222,40 @@
     entry.popover.classList.add("open");
     entry.badge.classList.add("open");
     positionBadge(entry);
+    positionPopover(entry);
+  }
+
+  /** Popover'ı viewport'a göre yerleştirir: varsayılan rozetin solunda/altında;
+   *  sola taşarsa sağa, alta taşarsa yukarı çevirir. overlay.css'teki
+   *  varsayılanı (right:42px; top:0) inline stille override eder. Player
+   *  viewport'un sol veya alt kenarına yakınken menünün ekran dışına
+   *  taşmasını engeller. */
+  function positionPopover(entry) {
+    const pop = entry.popover;
+    const hostLeft = parseFloat(entry.host.style.left) || 0;
+    const hostTop = parseFloat(entry.host.style.top) || 0;
+    const rect = pop.getBoundingClientRect();
+    const popW = rect.width || POPOVER_W;
+    const popH = rect.height || 180;
+    const GAP = 6;
+    // Yatay: solda yer varsa (ya da sağ da taşıyorsa) solda kal; yoksa sağa aç.
+    const roomLeft = hostLeft - GAP - popW >= 4;
+    const roomRight = hostLeft + BADGE_SIZE + GAP + popW <= window.innerWidth - 4;
+    if (roomLeft || !roomRight) {
+      pop.style.right = (BADGE_SIZE + GAP) + "px";
+      pop.style.left = "auto";
+    } else {
+      pop.style.left = (BADGE_SIZE + GAP) + "px";
+      pop.style.right = "auto";
+    }
+    // Dikey: aşağı taşarsa ve yukarıda yer varsa yukarı aç.
+    if (hostTop + popH > window.innerHeight - 4 && hostTop + BADGE_SIZE - popH >= 4) {
+      pop.style.top = "auto";
+      pop.style.bottom = "0";
+    } else {
+      pop.style.top = "0";
+      pop.style.bottom = "auto";
+    }
   }
 
   function closePopover(entry) {
@@ -246,6 +280,8 @@
     const left = rect.right - BADGE_SIZE - BADGE_MARGIN;
     entry.host.style.top = top + "px";
     entry.host.style.left = left + "px";
+    // Açık popover, kaydırma/yeniden boyutlandırmada da viewport'ta kalsın.
+    if (entry.popoverOpen) positionPopover(entry);
   }
 
   function repositionAll() {
@@ -385,8 +421,22 @@
 
   loadBadgesEnabled();
   scanOnce();
-  // Geç yüklenen player'ları yakala.
-  const observer = new MutationObserver(() => scanOnce());
+
+  // Geç yüklenen player'ları yakala. DİKKAT: scanOnce() kendi rozet host'larını
+  // document.documentElement'e ekler; observer subtree:true ile bunları da görür.
+  // Debounce olmadan her ekleme yeni bir mutation → yeni scanOnce → sonsuz
+  // kendi-kendini tetikleyen döngü (yüksek CPU). Bir sonraki frame'e kadar (veya
+  // kısa pencere) mutation'ları tek bir taramada birleştir.
+  let scanScheduled = false;
+  function scheduleScan() {
+    if (scanScheduled) return;
+    scanScheduled = true;
+    setTimeout(() => {
+      scanScheduled = false;
+      scanOnce();
+    }, 250);
+  }
+  const observer = new MutationObserver(scheduleScan);
   observer.observe(document.documentElement, {
     childList: true, subtree: true,
   });

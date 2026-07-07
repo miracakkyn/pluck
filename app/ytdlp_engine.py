@@ -8,8 +8,10 @@ fonksiyonlar (`list_formats`, `download`) çağıran taraf tarafından
 from __future__ import annotations
 
 import gc
+import ipaddress
 import re
 import shutil
+import socket
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -335,6 +337,31 @@ _KNOWN_IFRAME_HOSTS: tuple[str, ...] = (
 )
 
 
+# DNS çözümleyici — testler offline determinizm için bunu patch'ler.
+_resolve_host = socket.getaddrinfo
+
+
+def _resolves_to_internal(host: str) -> bool:
+    """Alan adı loopback/link-local bir IP'ye çözülüyor mu? (DNS rebinding).
+
+    Çözümleme başarısızsa False (fail-open): geçerli bir URL'yi geçici DNS
+    hatası yüzünden reddetme. TOCTOU: fetch anında IP değişebilir — bu, IP
+    literal kontrolünü tamamlayan ikincil bir savunmadır (yerel araç modeli).
+    """
+    try:
+        infos = _resolve_host(host, None)
+    except OSError:
+        return False
+    for info in infos:
+        try:
+            ip = ipaddress.ip_address(info[4][0])
+        except (ValueError, IndexError):
+            continue
+        if ip.is_loopback or ip.is_link_local:
+            return True
+    return False
+
+
 def _safe_discovered_url(url: str) -> str | None:
     """Sayfa taramasıyla KEŞFEDİLEN URL'yi doğrular; geçersizse None döner.
 
@@ -343,12 +370,23 @@ def _safe_discovered_url(url: str) -> str | None:
     görmüyordu. Kötü niyetli/ele geçirilmiş bir sayfa gömülü bir
     `http://127.0.0.1/...` veya link-local URL'yle motoru iç kaynaklara
     yönlendirebilir (çerez seçiliyse kimlik-doğrulamalı SSRF). Bu yüzden
-    keşfedilen her URL, yapıştırılan URL ile AYNI politikadan geçirilir.
+    keşfedilen her URL, yapıştırılan URL ile AYNI politikadan geçirilir; ayrıca
+    alan adları DNS rebinding'e karşı çözümlenip iç adres kontrol edilir.
     """
     try:
-        return _validate_url(url)
+        cleaned = _validate_url(url)
     except ValueError:
         return None
+    # _validate_url IP literal loopback/link-local'i eler; alan adı bir rebinding
+    # host'u olabilir (evil.com → 127.0.0.1). Host alan adıysa çözümle ve iç
+    # adrese işaret ediyorsa reddet.
+    host = (urlsplit(cleaned).hostname or "").lower()
+    try:
+        ipaddress.ip_address(host)  # IP literal → DNS'e gerek yok
+    except ValueError:
+        if host and _resolves_to_internal(host):
+            return None
+    return cleaned
 
 
 def _is_known_iframe_host(url: str) -> bool:
