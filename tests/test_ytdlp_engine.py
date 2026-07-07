@@ -47,6 +47,29 @@ def _mock_ydl(info=None, error=None):
     return ydl_class
 
 
+def _mock_ydl_download(on_download):
+    """`with YoutubeDL(opts) as ydl: ydl.download([url])` akışını taklit eder.
+
+    `ydl.download()` çağrısında `on_download(opts)` çalıştırılır — böylece test,
+    download()'ın verdiği progress/postprocessor hook'larını (opts içindeki)
+    tetikleyip gerçek yt-dlp'nin "finished" davranışını modelleyebilir.
+    """
+    class _FakeYDL:
+        def __init__(self, opts):
+            self.opts = opts
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def download(self, urls):
+            on_download(self.opts)
+
+    return _FakeYDL
+
+
 class TestBuildFormatSelector:
     def test_best_prefers_compatible_mp4(self):
         sel = build_format_selector("best")
@@ -237,6 +260,36 @@ class TestDownload:
         ctx = ydl_class.return_value.__enter__.return_value
         ctx.download.side_effect = DownloadError("ERROR: indirme basarisiz")
         with patch.object(ytdlp_engine, "YoutubeDL", ydl_class):
+            with pytest.raises(EngineError):
+                ytdlp_engine.download(
+                    url="https://x/v", selection="best", download_dir=str(tmp_path),
+                )
+
+    def test_download_returns_final_merged_path(self, tmp_path):
+        # Çok-akışlı indirmede güvenilir yol yalnızca merge sonrası bilinir;
+        # download() bu nihai yolu döndürmeli (queue_manager job.filename için).
+        target = tmp_path / "Test [id] best.mp4"
+
+        def _fire(opts):
+            target.write_bytes(b"x")
+            opts["progress_hooks"][0](
+                {"status": "finished", "filename": str(target)}
+            )
+
+        with patch.object(ytdlp_engine, "YoutubeDL", _mock_ydl_download(_fire)):
+            result = ytdlp_engine.download(
+                url="https://x/v", selection="best", download_dir=str(tmp_path),
+            )
+        assert result == str(target)
+
+    def test_download_raises_when_final_file_missing(self, tmp_path):
+        # ffmpeg merge sessizce çöktü: "finished" bildirilir ama dosya diskte yok.
+        def _fire(opts):
+            opts["progress_hooks"][0](
+                {"status": "finished", "filename": str(tmp_path / "yok.mp4")}
+            )
+
+        with patch.object(ytdlp_engine, "YoutubeDL", _mock_ydl_download(_fire)):
             with pytest.raises(EngineError):
                 ytdlp_engine.download(
                     url="https://x/v", selection="best", download_dir=str(tmp_path),
@@ -537,6 +590,25 @@ class TestVideoUrlPatterns:
         )
         urls = ytdlp_engine._extract_urls_from_html(html)
         assert len(urls) == 3
+
+    def test_loopback_and_linklocal_urls_filtered_ssrf(self):
+        # SSRF savunması: sayfadan çıkarılan loopback/link-local URL'ler elenir;
+        # yalnızca dış (public) medya URL'leri kalır.
+        html = (
+            'a:"http://127.0.0.1:5000/secret.mp4" '
+            'b:"https://cdn.other-host.com/ok.m3u8" '
+            'c:"http://169.254.169.254/latest/meta.m3u8"'
+        )
+        urls = ytdlp_engine._extract_urls_from_html(html)
+        assert urls == ["https://cdn.other-host.com/ok.m3u8"]
+
+    def test_iframe_host_substring_bypass_rejected(self):
+        # _IFRAME_RE substring eşleşse de gerçek host parse edilip doğrulanır:
+        # loopback bir host, path'inde 'mediadelivery.net' geçse bile reddedilir.
+        assert ytdlp_engine._is_known_iframe_host(
+            "https://iframe.mediadelivery.net/embed/1/abc") is True
+        assert ytdlp_engine._is_known_iframe_host(
+            "http://127.0.0.1:9000/x?d=mediadelivery.net") is False
 
 
 class TestExtractEach:

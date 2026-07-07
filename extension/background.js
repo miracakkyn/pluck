@@ -62,7 +62,11 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 });
 
 // Yeni navigasyon: önceki sayfanın URL'leri artık alakasız.
-chrome.webNavigation.onBeforeNavigate?.addListener((details) => {
+// `webNavigation` izni manifest'te yoksa `chrome.webNavigation` undefined olur;
+// `?.` namespace'in KENDİSİNİ korur — aksi halde SW yüklenirken TypeError atar,
+// üst-seviye yürütme durur ve aşağıdaki onMessage listener'ı HİÇ kaydolmaz
+// (rozet indirmesi "Receiving end does not exist" ile ölür).
+chrome.webNavigation?.onBeforeNavigate?.addListener((details) => {
   if (details.frameId === 0) {
     tabUrls.delete(details.tabId);
     try { chrome.storage.session.remove(`tab_${details.tabId}`); } catch {}

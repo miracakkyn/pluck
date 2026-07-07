@@ -18,7 +18,7 @@ from urllib.parse import urlsplit
 from yt_dlp import YoutubeDL
 from yt_dlp.utils import YoutubeDLError
 
-from app.models import FormatInfo, FormatsResponse, ScanResponse
+from app.models import FormatInfo, FormatsResponse, ScanResponse, _validate_url
 
 # aria2c sistemde varsa harici indirici olarak kullanılır (her parça için 16
 # paralel HTTP bağlantısı; CDN'in per-bağlantı hız limitini bypass eder).
@@ -328,18 +328,56 @@ _IFRAME_RE = re.compile(
     re.IGNORECASE,
 )
 
+# iframe host whitelist — _IFRAME_RE substring eşleştiği için host'un GERÇEKTEN
+# bunlardan biri olduğu ayrıca parse edilerek doğrulanır (SSRF savunması).
+_KNOWN_IFRAME_HOSTS: tuple[str, ...] = (
+    "mediadelivery.net", "b-cdn.net", "bunnycdn.com", "jwplayer.com",
+)
+
+
+def _safe_discovered_url(url: str) -> str | None:
+    """Sayfa taramasıyla KEŞFEDİLEN URL'yi doğrular; geçersizse None döner.
+
+    Kullanıcının yapıştırdığı URL API katmanında `_validate_url`'den geçer; ama
+    sayfadan çıkarılan (iframe src, regex m3u8/mp4) URL'ler o kontrolü hiç
+    görmüyordu. Kötü niyetli/ele geçirilmiş bir sayfa gömülü bir
+    `http://127.0.0.1/...` veya link-local URL'yle motoru iç kaynaklara
+    yönlendirebilir (çerez seçiliyse kimlik-doğrulamalı SSRF). Bu yüzden
+    keşfedilen her URL, yapıştırılan URL ile AYNI politikadan geçirilir.
+    """
+    try:
+        return _validate_url(url)
+    except ValueError:
+        return None
+
+
+def _is_known_iframe_host(url: str) -> bool:
+    """iframe src'nin parse edilmiş host'u bilinen bir video host'u mu?
+
+    `_IFRAME_RE` yalnızca substring eşleştiği için `http://127.0.0.1/x?
+    d=mediadelivery.net` gibi bir URL deseni yakalayabilir; host'u ayrıca
+    parse edip whitelist ile karşılaştırmak bu atlatmayı kapatır.
+    """
+    try:
+        host = (urlsplit(url).hostname or "").lower()
+    except ValueError:
+        return False
+    return any(host == h or host.endswith("." + h) for h in _KNOWN_IFRAME_HOSTS)
+
 
 def _extract_urls_from_html(html: str) -> list[str]:
     """HTML metninden tanınan tüm medya URL desenlerini çıkarır.
 
     JSON içindeki escape edilmiş URL'leri normalize eder (`\\/` → `/`).
-    Dedupe sırayı korur; spesifik pattern eşleşmeleri önce gelir.
+    Dedupe sırayı korur; spesifik pattern eşleşmeleri önce gelir. Keşfedilen
+    URL'ler `_safe_discovered_url` ile doğrulanır (loopback/link-local elenir).
     """
     normalized = html.replace("\\/", "/")
     found: list[str] = []
     for pattern in _VIDEO_URL_PATTERNS:
         found.extend(pattern.findall(normalized))
-    return list(dict.fromkeys(found))
+    deduped = list(dict.fromkeys(found))
+    return [u for u in (_safe_discovered_url(x) for x in deduped) if u]
 
 
 def _scan_page_for_video_urls(page_url: str, browser: str | None) -> list[str]:
@@ -373,13 +411,19 @@ def _scan_page_for_video_urls(page_url: str, browser: str | None) -> list[str]:
 
     # 2. geçiş: gömülü video iframe'lerini takip et (max 1 derinlik).
     for iframe_src in iframe_srcs:
+        # SSRF savunması: iframe src fetch edilmeden ÖNCE, yapıştırılan URL ile
+        # aynı doğrulamadan geçmeli VE gerçek host'u bilinen bir video host'u
+        # olmalı (substring eşleşmesi loopback/iç hedefleri geçirmesin).
+        safe_src = _safe_discovered_url(iframe_src)
+        if not safe_src or not _is_known_iframe_host(safe_src):
+            continue
         # MediaDelivery embed URL'sinin kendisi yt-dlp ile çözülebilir; onu
         # bir indirilebilir aday olarak listeye al.
-        if iframe_src not in all_urls:
-            all_urls.append(iframe_src)
+        if safe_src not in all_urls:
+            all_urls.append(safe_src)
         try:
             with YoutubeDL(options) as ydl:
-                iframe_html = ydl.urlopen(iframe_src).read().decode(
+                iframe_html = ydl.urlopen(safe_src).read().decode(
                     "utf-8", errors="replace"
                 )
             iframe_urls = _extract_urls_from_html(iframe_html)
@@ -573,7 +617,7 @@ def download(
     title: str | None = None,
     referer: str | None = None,
     progress_hook: Callable[[dict], None] | None = None,
-) -> None:
+) -> str | None:
     """Videoyu indirir ve gerekirse ffmpeg ile birleştirir (bloklayan).
 
     `progress_hook` yt-dlp'nin durum sözlüğüyle düzenli çağrılır. İptal,
@@ -588,6 +632,12 @@ def download(
     İndirme bittikten sonra dosyanın diskte gerçekten var olduğu doğrulanır;
     yoksa (ffmpeg merge sessizce başarısız olduysa) EngineError fırlatır.
     Hatada yarım kalan .part / .ytdl / .aria2 dosyaları temizlenir.
+
+    Dönüş: merge/dönüştürme SONRASI nihai dosya yolu (var olduğu doğrulanmış),
+    ya da hiçbir yol yakalanamadıysa None. Çağıran bunu `job.filename` olarak
+    kullanmalı — `progress_hook`'un "finished" event'i çok-akışlı indirmelerde
+    ARA parça dosyalarını (merge sonrası silinen .fNNN.mp4/.m4a) bildirir; bu
+    yüzden güvenilir yol yalnızca buradan (return değeri) alınabilir.
     """
     # ffmpeg her preset için gerekli (video+ses merge ya da audio→mp3). Yoksa
     # erkenden net hata ver; sessiz başarısızlıkla .part dosyalarını biriktirme.
@@ -720,6 +770,9 @@ def download(
             "olabilir. ffmpeg sürümünü kontrol edin."
         )
     if not expected:
-        # Hiçbir nihai yol yakalanmadıysa kuyruk tarafı yine de hata işaretler
-        # (queue_manager kontrolü); burada en azından artığı temizle.
+        # Hiçbir nihai yol yakalanmadı — artığı temizle. Çağıran (queue_manager)
+        # None dönüşünü görüp işi "dosya bulunamadı" ile hata işaretler.
         _cleanup_artifacts(download_path, captured_info, cleanup_prefix)
+    # Nihai (merge/convert sonrası) dosya yolunu döndür — queue_manager bunu
+    # job.filename olarak kullanır (progress hook'un bildirdiği ara dosyayı değil).
+    return expected

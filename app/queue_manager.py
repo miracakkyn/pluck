@@ -14,7 +14,6 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable
-from pathlib import Path
 from uuid import uuid4
 
 from app import ytdlp_engine
@@ -161,7 +160,7 @@ class QueueManager:
         """
         job.status = "downloading"
         try:
-            await asyncio.to_thread(
+            final_path = await asyncio.to_thread(
                 self._engine_download,
                 url=job.url,
                 selection=job.selection,
@@ -192,12 +191,18 @@ class QueueManager:
         else:
             if job.cancel_requested:
                 job.status = "cancelled"
-            elif not job.filename or not Path(job.filename).exists():
-                # Engine exception fırlatmadı ama diskte dosya yok — ffmpeg
-                # merge sessizce çökmüş olabilir. "completed" yalanı verme.
+            elif not final_path:
+                # download() nihai (merge sonrası) dosya yolunu yakalayamadı —
+                # dosyanın oluştuğunu doğrulayamıyoruz. "completed" yalanı verme.
+                # (Merge çöküp dosya eksik kalırsa download() zaten EngineError
+                #  fırlatır; bu dal yalnızca hiç yol yakalanmayan nadir durum.)
                 job.status = "error"
                 job.error = "İndirme tamamlanamadı (dosya bulunamadı)"
             else:
+                # Nihai yol download() içinde diskte var olduğu doğrulanarak
+                # döndü — progress hook'un bildirdiği (silinmiş olabilen) ara
+                # parça dosyasını değil, bunu kullan.
+                job.filename = final_path
                 job.status = "completed"
                 job.progress = 100.0
 

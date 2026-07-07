@@ -22,8 +22,8 @@ def _req(tmp_path, selection="best"):
 # --- sahte engine_download fonksiyonları ---------------------------------
 
 def _ok_download(*, url, selection, download_dir, browser, progress_hook, **_kwargs):
-    # download_dir altında gerçek bir dosya yarat ki queue_manager'ın yeni
-    # "diskte var mı" kontrolü geçsin.
+    # download_dir altında gerçek bir dosya yarat ve nihai yolu DÖNDÜR — gerçek
+    # download() gibi (queue_manager dönüş değerini job.filename olarak kullanır).
     from pathlib import Path
     target = Path(download_dir) / "video.mp4"
     target.write_bytes(b"x")
@@ -32,6 +32,7 @@ def _ok_download(*, url, selection, download_dir, browser, progress_hook, **_kwa
     progress_hook({"status": "downloading", "downloaded_bytes": 10,
                    "total_bytes": 10, "speed": 1048576, "eta": 0})
     progress_hook({"status": "finished", "filename": str(target)})
+    return str(target)
 
 
 def _fail_download(*, url, selection, download_dir, browser, progress_hook, **_kwargs):
@@ -51,6 +52,8 @@ def _slow_download(*, url, selection, download_dir, browser, progress_hook, **_k
         time.sleep(0.02)
     target.write_bytes(b"x")
     progress_hook({"status": "finished", "filename": str(target)})
+    return str(target)
+    return str(target)
 
 
 def _ytdlp_like_download(*, url, selection, download_dir, browser, progress_hook, **_kwargs):
@@ -67,6 +70,7 @@ def _ytdlp_like_download(*, url, selection, download_dir, browser, progress_hook
         raise EngineError("indirme kesildi") from exc
     target.write_bytes(b"x")
     progress_hook({"status": "finished", "filename": str(target)})
+    return str(target)
 
 
 async def _wait_for(qm, job_id, status, timeout=4.0):
@@ -104,6 +108,7 @@ class TestEnqueue:
             target = Path(download_dir) / "video.mp4"
             target.write_bytes(b"x")
             progress_hook({"status": "finished", "filename": str(target)})
+            return str(target)
 
         qm = QueueManager(engine_download=_capture)
         qm.start()
@@ -138,12 +143,19 @@ class TestWorker:
         await qm.stop()
 
     async def test_completed_only_if_file_exists(self, tmp_path):
-        """yt-dlp exception fırlatmasa bile diskte dosya yoksa 'error'."""
+        """download() nihai yolu döndüremezse (None) 'error' işaretlenmeli.
+
+        Progress hook bir "finished" filename bildirse bile queue_manager artık
+        ARA parça adına güvenmez; yalnızca download()'ın DÖNDÜRDÜĞÜ (merge sonrası,
+        var olduğu doğrulanmış) yola bakar. Dönüş None → dosya doğrulanamadı → error.
+        """
         def _phantom_download(*, url, selection, download_dir, browser,
                               progress_hook, **_kwargs):
-            # Dosya yaratmadan finished yayınla (ffmpeg merge çökmüş senaryo)
+            # Ara parça adı yayınla ama nihai yol döndürme (None) — merge sonrası
+            # dosya doğrulanamadı senaryosu.
             progress_hook({"status": "finished",
                            "filename": str(tmp_path / "yok.mp4")})
+            return None
         qm = QueueManager(engine_download=_phantom_download)
         qm.start()
         job_id = qm.enqueue(_req(tmp_path))
