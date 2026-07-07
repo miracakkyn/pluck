@@ -54,11 +54,17 @@ def _aria2c_available() -> bool:
 def _aria2c_download_options() -> dict:
     """aria2c harici indirici seçenekleri (kuruluysa download() bunları ekler).
 
-    Her HLS/HTTP parçası için aria2c 16 paralel bağlantı açar; toplam akış =
-    (concurrent_fragment_downloads) × (aria2c connections).
+    YALNIZ HLS (m3u8) için aria2c kullanılır — BunnyCDN/üniversite portallarında
+    her fragment için 16 paralel bağlantıyla belirgin hız kazancı sağlar.
+
+    Düz `http`/progressive indirmelerde (ör. YouTube googlevideo) aria2c KULLANILMAZ:
+    yt-dlp'nin extractor'a özel HTTP başlıklarını (User-Agent, `c=ANDROID_VR`
+    client'a bağlı imzalı URL) aria2c'ye tam aktaramadığı için CDN `403` döndürür
+    ("aria2c exited with code 22"). O yollar için yt-dlp'nin yerleşik indiricisi
+    başlıkları doğru gönderir ve güvenilir çalışır.
     """
     return {
-        "external_downloader": {"http": "aria2c", "m3u8_native": "aria2c"},
+        "external_downloader": {"m3u8_native": "aria2c"},
         "external_downloader_args": {
             "aria2c": [
                 "-x16", "-s16",

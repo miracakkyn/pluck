@@ -102,6 +102,14 @@ class TestAria2cOptions:
         assert 1048576 <= size <= 1073741824, \
             f"aria2c -k {k_val} ({size} B) geçerli aralık dışında → code 28"
 
+    def test_aria2c_only_for_hls_not_http(self):
+        # aria2c http (YouTube googlevideo) indirmelerinde 403 alır (extractor'a
+        # özel başlıkları aktaramaz) → "code 22". Yalnız m3u8_native (HLS) için
+        # kullanılmalı; http yolları yt-dlp'nin yerleşik indiricisine bırakılır.
+        ext = ytdlp_engine._aria2c_download_options()["external_downloader"]
+        assert "m3u8_native" in ext
+        assert "http" not in ext, "aria2c http için kullanılmamalı (YouTube 403)"
+
 
 class TestBuildFormatSelector:
     def test_best_prefers_compatible_mp4(self):
