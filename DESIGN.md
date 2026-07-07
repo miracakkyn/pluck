@@ -54,17 +54,20 @@ videoaraci/
 ├── start.command            # macOS Finder çift-tık → start.sh
 ├── app/
 │   ├── __init__.py
-│   ├── main.py              # FastAPI app, route'lar, statik mount, yaşam döngüsü
-│   ├── config.py            # sabitler: host/port, varsayılan indirme klasörü
+│   ├── main.py              # FastAPI app, route'lar, jeton middleware, statik mount
+│   ├── config.py            # sabitler: host/port, indirme klasörü, api_token()
 │   ├── models.py            # pydantic istek/yanıt şemaları + Job veri yapısı
-│   ├── ytdlp_engine.py      # yt-dlp sarmalayıcı: list_formats(), download()
-│   ├── queue_manager.py     # sıralı async worker + JobRegistry
-│   └── events.py            # SSE ilerleme yayını
+│   ├── ytdlp_engine.py      # yt-dlp sarmalayıcı: list_formats(), download(), sayfa tarama
+│   ├── queue_manager.py     # sıralı async worker + JobRegistry (eviction)
+│   ├── events.py            # SSE ilerleme yayını
+│   └── folder_picker.py     # native klasör seçici alt-process (tkinter/osascript/zenity)
 ├── web/
-│   ├── index.html / app.js / style.css
-└── tests/
-    ├── __init__.py
-    ├── test_ytdlp_engine.py / test_queue_manager.py / test_models.py
+│   └── index.html / app.js / style.css   # app.js: jeton sabiti + fetch başlığı
+├── extension/               # MV3 eklenti (§16): manifest, background, content,
+│   │                        #   popup, overlay.css, pluck-token.js
+└── tests/                   # ~238 test, %99 kapsam (her app modülü için ayrı dosya
+    ├── __init__.py          #   + test_api, test_run, test_folder_picker,
+    └── ...                  #   test_preset_consistency)
 ```
 
 Hiçbir dosya 800 satırı geçmez; tipik 200–400 satır.
@@ -72,24 +75,32 @@ Hiçbir dosya 800 satırı geçmez; tipik 200–400 satır.
 ## 4. Bileşenler
 
 ### `config.py`
-- `HOST = "127.0.0.1"`, `PORT = 8765` (sabit; çakışırsa boş port aranır).
+- `HOST = "127.0.0.1"`, `DEFAULT_PORT = 8765` (çakışırsa boş port aranır, `run.py`).
 - `default_download_dir() -> Path` → `Path.home() / "Downloads"` (yoksa
   `Path.home()`'a düşer).
-- `SUPPORTED_BROWSERS = ("chrome", "edge", "firefox", "safari", "brave", "opera")`.
+- `SUPPORTED_BROWSERS = ("chrome", "edge", "firefox", "brave", "opera", "safari")`;
+  `available_browsers()` `safari`'yi yalnız macOS'ta sunar.
 - `EVENT_INTERVAL = 0.5` (SSE anlık görüntü aralığı, sn).
+- `api_token()` — paylaşımlı jeton (`PLUCK_TOKEN` env ya da `_DEFAULT_API_TOKEN`).
 - Tüm yollar `pathlib.Path`; sabit ayraç yok.
 
-### `models.py` (pydantic v2)
-- `FormatsRequest { url: str }` — `url` boş olamaz.
-- `FormatInfo { format_id, ext, resolution, height, fps, vcodec, acodec,
-  filesize, note, kind }` — `kind ∈ {video, audio, combined}`.
-- `FormatsResponse { title, duration, thumbnail, uploader, formats: [FormatInfo],
-  presets: [str] }`.
-- `JobRequest { url, selection, download_dir, browser: str | None }` —
-  `selection` ya bir preset adı ya da ham `format_id`; `download_dir` var olan
-  bir dizin olmalı (doğrulayıcı); `browser` verilirse `SUPPORTED_BROWSERS`'ta olmalı.
-- `Job` (dataclass) → `JobRegistry`'de tutulan iş durumu (§9).
-- `ApiError { detail: str }` — tutarlı hata zarfı.
+### `models.py` (pydantic v2) — güncel imzalar models.py'de canonical
+- `FormatsRequest { url: str, browser: str | None }` — `url` `_validate_url`'den
+  geçer (boş değil, http(s), loopback/link-local + kontrol-karakteri reddi).
+- `FormatInfo { format_id, ext, resolution, kind, height, fps, vcodec, acodec,
+  filesize, note }` — `kind ∈ {video, audio, combined}`.
+- `FormatsResponse { title, formats: [FormatInfo], presets: [str], duration,
+  thumbnail, uploader, url }` (`url` playlist girdileri için doldurulur).
+- `ScanResponse { type: "video"|"playlist", video?, playlist_title?, entries?,
+  warnings: [str] }` — `/api/formats` ve `/api/probe-urls` yanıtı (§6).
+- `ProbeUrlsRequest { urls: [str] (1-20), referer, browser? }` — her URL ve
+  referer `_validate_url`'den geçer.
+- `JobRequest { url, selection, download_dir, browser?, title?, referer? }` —
+  `selection` preset adı ya da ham `format_id`; `download_dir` var olan dizin
+  olmalı; `title` verilirse dosya adında kullanılır; `referer` embed indirmelerde
+  HTTP Referer'a iletilir (hepsi doğrulayıcıdan geçer).
+- `Job` (dataclass) → `JobRegistry`'de tutulan iş durumu (`title_locked`,
+  `cancel_requested` dahil; `snapshot()` iç bayrakları hariç serileştirir) (§9).
 
 ### `ytdlp_engine.py` — yt-dlp sarmalayıcı (saf, framework'ten bağımsız)
 - `list_formats(url) -> FormatsResponse`
@@ -147,33 +158,47 @@ Tüm yanıtlar JSON. Hatalar `{ "detail": "<mesaj>" }` + uygun HTTP kodu.
 
 | Metot | Yol | İstek | Yanıt |
 |---|---|---|---|
-| GET | `/` | — | index.html |
-| GET | `/api/config` | — | `{ default_download_dir, common_dirs[], browsers[] }` |
+| GET | `/` | — | index.html (jetonsuz) |
+| GET | `/api/config` | — | `{ default_download_dir, common_dirs[], browsers[], presets[] }` |
 | POST | `/api/formats` | `FormatsRequest` | `ScanResponse` (tek video veya playlist + warnings) |
 | POST | `/api/probe-urls` | `ProbeUrlsRequest { urls[], referer, browser? }` | `ScanResponse` (eklenti content script'inden gelen URL listesini yt-dlp ile çözer) |
 | POST | `/api/jobs` | `JobRequest` | `{ job_id }` |
 | GET | `/api/jobs` | — | `[Job, ...]` |
 | DELETE | `/api/jobs/{job_id}` | — | `{ job_id, status }` |
+| POST | `/api/jobs/clear` | — | `{ cleared: <int> }` (biten işleri temizler) |
+| POST | `/api/pick-folder` | — | `{ pending: true }` (native klasör seçiciyi açar, §17) |
+| GET | `/api/pick-folder` | — | `{ pending, path, error }` (seçim durumu) |
 | GET | `/api/events` | — | SSE akışı (`text/event-stream`) |
 
-HTTP kodları: `200` başarı · `400` geçersiz girdi/URL · `404` bilinmeyen
-`job_id` · `422` pydantic doğrulama · `500` beklenmeyen motor hatası.
+**Jeton (Sprint 15):** `/api/*` uçları — **`/api/events` hariç** — `X-Pluck-Token`
+başlığında sabit paylaşımlı jetonu ister; yoksa `403`. `GET /`, `/static/*` ve SSE
+jetonsuz erişilebilir (EventSource özel başlık gönderemez). Amaç: rastgele diğer
+yerel eklenti/yazılımın API'yi kullanmasını engellemek (bkz. §16). Jeton
+`chrome-extension://` CORS ile birlikte çalışır: CORS middleware jeton kontrolünün
+DIŞINDA (OPTIONS preflight jetonsuz yanıtlanır).
+
+HTTP kodları: `200` başarı · `400` geçersiz girdi/URL · `403` eksik/yanlış jeton ·
+`404` bilinmeyen `job_id` · `422` pydantic doğrulama · `500` beklenmeyen motor hatası.
 
 ## 7. Format / kalite seçimi
 
-Arayüz iki yol sunar; **varsayılan en yüksek kalite**:
+Arayüz iki yol sunar; **varsayılan en yüksek kalite**. İlk dalda mp4 video +
+m4a (AAC) ses tercih edilir: bu, her oynatıcıda sesli çalan bir .mp4 üretir
+(opus sesin mp4 içinde sessiz görünmesini önler). Tek doğruluk kaynağı
+`ytdlp_engine._PRESET_SELECTORS` (adları `PRESETS`; bkz. §15 tek-kaynak testi):
 
 | Preset | yt-dlp format string'i |
 |---|---|
-| `best` (varsayılan) | `bv*+ba/b` |
-| `1080p` | `bv*[height<=1080]+ba/b/b[height<=1080]` |
-| `720p` | `bv*[height<=720]+ba/b/b[height<=720]` |
-| `480p` | `bv*[height<=480]+ba/b/b[height<=480]` |
+| `best` (varsayılan) | `bv*[ext=mp4]+ba[ext=m4a]/bv*+ba/b` |
+| `1080p` | `bv*[height<=1080][ext=mp4]+ba[ext=m4a]/bv*[height<=1080]+ba/b[height<=1080]/b` |
+| `720p` | `bv*[height<=720][ext=mp4]+ba[ext=m4a]/bv*[height<=720]+ba/b[height<=720]/b` |
+| `480p` | `bv*[height<=480][ext=mp4]+ba[ext=m4a]/bv*[height<=480]+ba/b[height<=480]/b` |
 | `audio` | `ba/b` + `FFmpegExtractAudio` (mp3) |
 | ham `format_id` | `"<id>+ba/b"` (video-only ise sese eklenir), aksi halde `"<id>"` |
 
-`merge_output_format="mp4"`. Bir preset için format yoksa yt-dlp `/b`
-yedeğiyle birleşik en iyi formata düşer.
+`merge_output_format="mp4"`. Çözünürlük preset'lerinin son dalı **koşulsuz `/b`**:
+istenen yükseklikte format yoksa (örn. yalnız-720p embed'de 480p) "format yok"
+hatası yerine mevcut en iyi formata düşülür (Sprint 13).
 
 ## 8. Cookie desteği (login'li siteler)
 
@@ -198,8 +223,17 @@ yedeğiyle birleşik en iyi formata düşer.
   ara değer kaçması önemsizdir → event-push yerine snapshot tercih edildi
   (daha az karmaşıklık, daha az hata yüzeyi).
 - **İptal:** `Job.cancel_requested` bayrağı; progress hook bunu görürse
-  `yt_dlp.utils.DownloadCancelled` (yoksa özel exception) fırlatıp indirmeyi
-  durdurur. Sprint 2'de yt-dlp'nin iptal API'si doğrulanacak.
+  `_Cancelled` fırlatıp indirmeyi durdurur. `download()` bunu `YoutubeDLError`'a
+  sarmalanmış olarak da yükseltebilir; bu yüzden `queue_manager` iptal/hata
+  ayrımını istisna türüne değil `cancel_requested` bayrağına göre yapar.
+- **Nihai dosya adı (Sprint 14):** progress hook'un "finished" event'i
+  çok-akışlı indirmelerde ARA parça dosyalarını (bv*+ba video/ses; merge sonrası
+  silinir) bildirir. Bu yüzden `job.filename` ve başarı kararı progress hook'a
+  DEĞİL, `download()`'ın DÖNDÜRDÜĞÜ merge-sonrası nihai yola dayanır (var olduğu
+  `download()` içinde doğrulanır; yoksa `EngineError`). Aksi halde başarılı
+  indirmeler "dosya bulunamadı" hatası olarak görünüyordu.
+- **Bellek sınırı (Sprint 17):** `JobRegistry` `_MAX_JOBS`'u aşınca en eski
+  BİTMİŞ işleri düşürür (aktifler korunur) — uzun oturumda sınırsız büyümesin.
 
 ## 10. Çapraz platform stratejisi
 
@@ -225,7 +259,17 @@ script'leri (venv bootstrap komutları).
 
 ## 12. Güvenlik
 
-- Sunucu yalnızca `127.0.0.1` (ağa kapalı). CORS gevşetilmez.
+- Sunucu yalnızca `127.0.0.1` (ağa kapalı). CORS yalnız `chrome-extension://`.
+- **Paylaşımlı jeton (Sprint 15):** `/api/*` uçları (SSE hariç) `X-Pluck-Token`
+  ister; rastgele diğer yerel eklenti/yazılım erişemez (bkz. §6, §16).
+- **SSRF savunması (Sprint 14):** kullanıcının verdiği URL `_validate_url`'den
+  geçer (loopback/link-local + kontrol-karakteri reddi). AYRICA sayfa taramasıyla
+  KEŞFEDİLEN URL'ler (iframe src, regex m3u8/mp4) de aynı politikadan geçer
+  (`_safe_discovered_url`); iframe host'u substring değil parse edilerek
+  whitelist'e karşı doğrulanır (`_is_known_iframe_host`). Alan adları DNS
+  rebinding'e karşı çözümlenip iç adres kontrol edilir (`_resolves_to_internal`,
+  ikincil savunma). `referer` başlığı da `_validate_url`'den geçer (CRLF/header
+  injection reddi).
 - `download_dir` doğrulanır (var olan dizin olmalı); yol enjeksiyonuna karşı
   `outtmpl` yalnızca `paths.home` altına yazar.
 - Cookie/tarayıcı verisi loglanmaz, yanıtlarda dönmez.
@@ -327,12 +371,21 @@ extension/
 5. Popup açık kaldığı sürece `GET /api/jobs` ~1.2 sn'de bir yoklanıp ilerleme
    gösterilir (popup kapanınca indirme motorda devam eder).
 
-### Backend değişikliği (tek)
+### Backend değişikliği (CORS + jeton)
 
 Eklenti `chrome-extension://` kaynağından motora erişir. `CORSMiddleware`
 eklenir: `allow_origin_regex = chrome-extension://.*` — yalnızca eklenti
-kaynaklarının yanıtı okumasına izin verir; rastgele web siteleri okuyamaz.
+kaynaklarının yanıtı **okumasına** izin verir; rastgele web siteleri okuyamaz.
 `/api/formats` ve `/api/jobs` zaten URL aldığı için yeni uç gerekmez.
+
+**Jeton (Sprint 15):** CORS, çapraz-köken POST'un *gönderilmesini* engellemez;
+ayrıca kurulu HERHANGİ bir eklenti (yalnız Pluck'ınki değil) `chrome-extension://`
+kaynağından motora erişebilir. Bu yüzden `/api/*` uçları (SSE hariç) sabit bir
+paylaşımlı jeton (`X-Pluck-Token`) ister — Pluck'ın istemcileri (eklenti +
+web arayüzü) gönderir, rastgele diğer yerel yazılım göndermez → `403`. Jeton
+middleware'i CORS'tan ÖNCE eklenir (CORS dışta kalıp OPTIONS preflight'ı
+jetonsuz yanıtlar). Sabit paylaşımlı sırdır; hedefli saldırıya karşı değildir
+(bunun için `PLUCK_TOKEN` ortam değişkeni + istemci sabitleri eşleştirilir).
 
 ### İzinler (manifest)
 
@@ -342,85 +395,81 @@ kaynaklarının yanıtı okumasına izin verir; rastgele web siteleri okuyamaz.
 ### Güvenlik notu
 
 CORS, çapraz kaynaklı bir POST'un *gönderilmesini* engellemez; yalnızca
-yanıtın okunmasını kısıtlar. Kötü niyetli bir site teorik olarak yerel motora
-indirme tetikleyebilir (yanıtı okuyamaz, veri sızdıramaz). Tek kullanıcılı
-yerel araç için bu düşük önemde kabul edilir; ileride paylaşımlı bir jeton
-(token) ile sıkılaştırılabilir.
+yanıtın okunmasını kısıtlar. Kötü niyetli bir web sitesi teorik olarak yerel
+motora indirme tetikleyebilir (yanıtı okuyamaz, veri sızdıramaz) — pratikte
+`/api/*` uçları JSON içerik-tipi preflight'ı ile web sayfalarına kapalıdır. Kurulu
+DİĞER eklentilere karşı ise **paylaşımlı jeton uygulandı** (Sprint 15, bkz.
+"Backend değişikliği"): jetonu bilmeyen bir eklenti `403` alır.
 
 ### Kapsam dışı (v1 eklenti)
 
 - Eklenti mağazasına yayınlama — v1'de "paketlenmemiş yükle" ile kurulur.
 
-## 16.2 Content script + webRequest (Sprint 10)
+## 16.2 Content script + sayfa-içi rozet (Sprint 10 → 11 → 15)
 
-Sprint 6'daki popup-only eklenti mimarisi sayfanın JS-render ettiği veya
-backend HTML fetch'inin göremediği medya kaynaklarını yakalayamıyordu. Sprint
-10'da eklenti üç ek bileşenle genişletildi (manifest'e `content_scripts`
-yazılmadan, `activeTab` izni korunarak):
+Sprint 6'daki popup-only mimari, sayfada gezerken IDM tarzı bir "sayfa-içi indir"
+deneyimi sunmuyordu. Sprint 10-11'de content script + Shadow DOM rozeti eklendi;
+Sprint 10 ayrıca bir `webRequest` sniffer + DOM URL toplama boru hattı içeriyordu.
+
+**Sprint 15 sadeleştirmesi:** o boru hattı (`webRequest.onResponseStarted`,
+sekme-bazlı `tabUrls`, `DOM_URLS`/`GET_TAB_URLS` mesajları, `chrome.storage.session`
+kalıcılığı, `webNavigation` temizliği) **söküldü** — çünkü `popup.js` topladığı
+URL'leri hiçbir zaman tüketmiyordu (`GET_TAB_URLS`/`/api/probe-urls` çağrılmıyordu);
+tamamen yetim koddu. Rozet zaten indirilecek URL'yi doğrudan hedeften alıyor. Bu
+sadeleştirme `webRequest` iznini ve `<all_urls>` host iznini kaldırdı.
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│ Sayfa (uzemykoabt.com vb.)                                   │
-│  <video>  <video>  <video>      ← her birine Shadow DOM     │
-│  [▼ Pluck][▼ Pluck][▼ Pluck]    rozet (IDM tarzı)           │
-│       │       │       │                                      │
-│       ▼ DOM tarama + global player API probe                 │
-│  content.js ─── chrome.runtime.sendMessage ──┐               │
-│                                              ▼               │
-│                              background.js (MV3 SW)          │
-│  webRequest.onResponseStarted ─ m3u8/mpd/mp4 sniff           │
-│  chrome.storage.session ile sekme bazında URL Map'i          │
-│                                              │               │
-│                                              ▼               │
-│  popup.js ── GET_TAB_URLS ────────────────────┘              │
-│  POST /api/probe-urls {urls[], referer, browser}             │
-│                                              │               │
-│                                              ▼               │
-│                               FastAPI motor (Sprint 9 endp.) │
+│ Sayfa (herhangi)                                             │
+│  <video> / video-iframe / player-div  ← her birine Shadow    │
+│  [▼ Pluck]                              DOM rozet (IDM tarzı) │
+│       │ tıkla → kalite menüsü                                 │
+│       ▼ target.currentSrc/src/iframe.src/sayfa               │
+│  content.js ── sendMessage{DOWNLOAD_URL} ──┐                  │
+│                                            ▼                  │
+│                            background.js (MV3 SW)            │
+│         motoru bul (8765-8770) + X-Pluck-Token               │
+│         POST /api/jobs {url, selection, referer, browser}    │
+│                                            │                  │
+│                                            ▼                  │
+│                                    FastAPI motor             │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-- **`content.js`** (`extension/content.js`): popup açıldığında
-  `chrome.scripting.executeScript({allFrames:true})` ile aktif sekmeye
-  enjekte edilir. Her `<video>` elementinin sağ-üstüne Shadow DOM içinde
-  küçük yarı şeffaf rozet (`overlay.css`) yerleştirir; rozete tıklayınca
-  background → yerel motor /api/jobs → kuyruğa indirme eklenir. Aynı zamanda
-  `<video>.currentSrc`, `<source>` ve global `window.jwplayer()` / `videojs`
-  API'lerinden URL toplar; `chrome.runtime.sendMessage({type:"DOM_URLS"})`
-  ile background'a yollar. `MutationObserver` + 2 sn'lik periyodik tarama
-  geç yüklenen player'ları yakalar.
+- **`content.js`**: manifest `content_scripts` ile HER sayfaya otomatik enjekte
+  olur (`matches: ["<all_urls>"]`, `all_frames: false`). `<video>` elementlerine,
+  bilinen video-iframe host'larına ve player-benzeri container'lara Shadow DOM
+  içinde yarı şeffaf rozet (`overlay.css`) yerleştirir. Rozete tıklayınca kalite
+  menüsü (popover) açılır; seçim → `sendMessage({type:"DOWNLOAD_URL", url, referer,
+  selection})`. İndirilecek URL doğrudan hedeften alınır (`<video>.currentSrc`/
+  `src`/`<source>`, `<iframe>.src`, ya da yedek olarak sayfa adresi). Debounce'lu
+  `MutationObserver` + 2 sn periyodik tarama geç yüklenen player'ları yakalar;
+  popover viewport kenarında ekran dışına taşmaz. `all_frames:false` çift rozeti
+  önler (üst çerçeve iframe elementini zaten rozetler).
 
-- **`background.js`** (`extension/background.js`): MV3 service worker.
-  `chrome.webRequest.onResponseStarted` ile (`xmlhttprequest`, `media`,
-  `other` türleri) sekmenin yaptığı tüm istekleri gözler; URL `.m3u8`,
-  `.mpd`, `.mp4`, `.m4s` ile bitiyorsa ilgili sekmeye yazar. Service worker
-  uykuda olabileceği için her ekleme `chrome.storage.session`'a yansıtılır
-  (chrome 102+). Rozet tıklandığında 8765–8770 port aralığında motoru bulup
-  `POST /api/jobs` ile (best preset + default klasör) indirme tetikler.
+- **`background.js`** (MV3 service worker): tek iş — `DOWNLOAD_URL` mesajını alıp
+  8765-8770 aralığında motoru bulur ve `X-Pluck-Token` başlığıyla `POST /api/jobs`
+  eder (kullanıcının seçtiği kalite + config'ten default klasör + popup ile aynı
+  çerez tarayıcısı). `importScripts("pluck-token.js")` ile jetonu yükler.
 
-- **`popup.js`** (mevcut, genişletildi): `boot()` içinde aktif sekmeye
-  content.js'i inject eder ve `GET_TAB_URLS` ile toplanmış URL'leri alır.
-  `scanPage()` artık `/api/formats` ile `/api/probe-urls`'i **paralel**
-  çağırır; daha çok girdi üretene güvenir (genelde probe-urls, çünkü DOM +
-  webRequest yt-dlp'nin atladıklarını yakalar). `warnings[]` alanı popup'ta
-  info banner olarak gösterilir.
+- **`popup.js`**: `scanPage()` yalnızca `/api/formats` çağırır (backend Sprint 9
+  sayfa taraması + iframe + `warnings[]` ile JS-gömülü videoları zaten yakalar).
+  `/api/probe-urls` ucu motor tarafında durur (eklenti onu artık çağırmaz; ileride
+  ya da manuel kullanım için mevcut).
 
 **İzinler** (manifest.json):
-- `activeTab` (mevcut) — kullanıcı eklentiye tıkladığında aktif sekme.
-- `scripting` — `chrome.scripting.executeScript` için (programatik inject).
-- `webRequest` — observation modunda, blocking yok (MV3 uyumlu).
-- `storage` — `chrome.storage.session` ile sekme URL kalıcılığı.
-- `host_permissions`: `["http://127.0.0.1/*", "<all_urls>"]` — motor +
-  webRequest tüm sayfaları görmek için.
+- `activeTab` — kullanıcı eklentiye tıkladığında aktif sekme (programatik inject yedeği).
+- `scripting` — `chrome.scripting.executeScript` (boot'ta yedek inject).
+- `storage` — `chrome.storage.local` (rozet toggle `badgesEnabled`, `cookieBrowser`).
+- `host_permissions`: `["http://127.0.0.1/*"]` — yalnız yerel motor.
 - `web_accessible_resources`: `overlay.css` (Shadow DOM'a yüklemek için).
 
-**Cross-origin iframe**: `allFrames: true` ile gömülü iframe'lere de
-injection denenir; `X-Frame-Options: DENY` durumlarında webRequest sniffer
-yedek olarak görür.
-
-**Gizlilik**: `content_scripts` manifest entry'si yok — kullanıcı eklentiye
-tıklamadığı sürece hiçbir sayfaya kod enjekte edilmez. `activeTab` izniyle
-kod sadece o anki sekme + alt iframe'lerinde çalışır.
+**Gizlilik / bilinçli tercih:** content_scripts `<all_urls>` ile HER sayfaya
+otomatik enjekte olur — bu, "gez ve gördüğün videoyu indir" IDM deneyiminin
+gereğidir (rozet her zaman açık). Script yalnızca rozet yerleştirmek için DOM
+okur; hiçbir çapraz-köken fetch yapmaz ve veri sızdırmaz — rozet tıklamasında
+seçilen URL SADECE yerel motora (`127.0.0.1`) gider. Rozetler `badgesEnabled`
+toggle ile kapatılabilir.
 
 ## 17. Klasör seçici (native pencere)
 

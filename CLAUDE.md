@@ -61,8 +61,19 @@ kurulum/başlatma komutları olmalı; bunlar README'de ayrı belgelenir.
 - [x] Sprint 11 — Otomatik tarama + rozet toggle + kalite seçim menüsü; popover hidden fix; iframe/player-container rozet (Ders-1)
 - [x] Sprint 12 — HLS codec=None formatlarını listele (_infer_kind_without_codecs); rozet indirmesine çerez+referer (login'li embed'ler); JobRequest.referer zinciri
 - [x] Sprint 13 — Çözünürlük preset'lerine sınırsız /b fallback (yalnız-720p embed'de 480p artık iner); rozet kalite menüsü tıklama fix (capture-phase dış-tıklama handler'ı); çift rozet fix (all_frames:false + örtüşme dedup); iptal/hata sonrası fragment temizliği (gc + retry loop + queue ikinci-geçiş)
+- [x] Sprint 14 — Çok-ajanlı audit'te doğrulanan 3 HIGH bug: (1) job.filename → başarılı çok-akışlı/audio indirmeler "hata" görünüyordu; download() artık merge-sonrası nihai yolu döndürür, queue_manager onu job.filename yapar. (2) SSRF: sayfa taramasıyla keşfedilen URL'ler _validate_url'ü atlıyordu → _safe_discovered_url + _is_known_iframe_host host-parse. (3) webNavigation: SW yüklenirken çökme riski → `chrome.webNavigation?.` guard.
+- [x] Sprint 15 — Eklenti: yetim webRequest/DOM_URLS/GET_TAB_URLS boru hattı SÖKÜLDÜ (popup hiç tüketmiyordu) → `webRequest` izni ve `<all_urls>` host izni düşürüldü. Paylaşımlı jeton (X-Pluck-Token) /api/* uçlarını korur (SSE hariç). DNS rebinding savunması. Rozet UX: popover viewport-flip, MutationObserver debounce, scanPage sequencing.
+- [x] Sprint 16 — Web arayüzü UX/erişilebilirlik: playlist warnings gösterimi, fetchFormats re-entrancy, aria-live gürültüsü kaldırıldı, EventSource onerror, fetch timeout, klasör-seçici/temizle hata geribildirimi.
+- [x] Sprint 17 — Backend: JobRegistry eviction (_MAX_JOBS), stop() nazik drenaj, ffmpeg/aria2c re-probe (kurulum-sonrası tespit), ölü kod (_selection_needs_ffmpeg) kaldırıldı, preset tek-kaynak testi. BONUS: QueueManager.start() taze asyncio.Queue (loop-binding latent bug giderildi).
+- [x] Sprint 18 — Test kapsamı %83 → %99 (+87 test, çok-ajanlı paralel): folder_picker %100, main %100, models %100, queue_manager %99, ytdlp_engine %98.
+- [x] Sprint 19 — Doküman senkronizasyonu (DESIGN.md §6/§7/§12/§16 + bu dosya).
 
-Test: 140 test, %96+ kapsam. Çalıştır: `.venv\Scripts\python.exe -m pytest`
+Test: 238 test, %99 kapsam. Çalıştır: `.venv\Scripts\python.exe -m pytest`
+
+> **Güvenlik notu (Sprint 15):** /api/* uçları (`/api/events` hariç) sabit bir
+> paylaşımlı jeton (`X-Pluck-Token`) ister. Değer üç yerde EŞLEŞMELİ:
+> `config._DEFAULT_API_TOKEN`, `extension/pluck-token.js`, `web/app.js`. Motorda
+> `PLUCK_TOKEN` ortam değişkeni ayarlanırsa istemci sabitleri de güncellenmeli.
 
 > Not: BunnyCDN/MediaDelivery gibi siteler login arkasında — eklenti yalnız
 > aktif sekme URL'sini motora verir. **Tekrar eden "Requested format is not
