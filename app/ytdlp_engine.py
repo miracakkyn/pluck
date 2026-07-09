@@ -9,9 +9,14 @@ from __future__ import annotations
 
 import gc
 import ipaddress
+import logging
+import os
 import re
 import shutil
 import socket
+import sqlite3
+import sys
+import tempfile
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -21,6 +26,8 @@ from yt_dlp import YoutubeDL
 from yt_dlp.utils import YoutubeDLError
 
 from app.models import FormatInfo, FormatsResponse, ScanResponse, _validate_url
+
+logger = logging.getLogger("videoaraci")
 
 # aria2c sistemde varsa harici indirici olarak kullanılır (her parça için 16
 # paralel HTTP bağlantısı; CDN'in per-bağlantı hız limitini bypass eder).
@@ -80,6 +87,112 @@ def _aria2c_download_options() -> dict:
             ],
         },
     }
+
+
+# --- Tarayıcı çerezleri (login gerektiren siteler) ------------------------
+
+
+def _firefox_profile_roots() -> list[Path]:
+    """Firefox profil kökleri — yt-dlp'nin baktığı yerlerle aynı, platforma göre."""
+    if sys.platform in ("win32", "cygwin"):
+        candidates = [
+            Path(os.path.expandvars(r"%APPDATA%\Mozilla\Firefox\Profiles")),
+            Path(os.path.expandvars(
+                r"%LOCALAPPDATA%\Packages\Mozilla.Firefox_n80bbvh6b1yt2"
+                r"\LocalCache\Roaming\Mozilla\Firefox\Profiles",
+            )),
+        ]
+    elif sys.platform == "darwin":
+        candidates = [Path.home() / "Library/Application Support/Firefox/Profiles"]
+    else:
+        candidates = [
+            Path.home() / ".mozilla/firefox",
+            Path.home() / "snap/firefox/common/.mozilla/firefox",
+        ]
+    return [path for path in candidates if path.is_dir()]
+
+
+def _newest_firefox_cookie_db() -> Path | None:
+    """En son kullanılan Firefox profilinin `cookies.sqlite` yolu (yoksa None).
+
+    Sıralamada `-wal` dosyasının zamanı da hesaba katılır: Firefox açıkken ana
+    dosyanın mtime'ı eski kalabilir; taze çerezler WAL'e yazılır.
+    """
+    dbs: list[Path] = []
+    for root in _firefox_profile_roots():
+        dbs.extend(root.glob("cookies.sqlite"))
+        dbs.extend(root.glob("*/cookies.sqlite"))
+    if not dbs:
+        return None
+
+    def _used_at(db: Path) -> float:
+        newest = db.stat().st_mtime
+        wal = Path(f"{db}-wal")
+        if wal.exists():
+            newest = max(newest, wal.stat().st_mtime)
+        return newest
+
+    return max(dbs, key=_used_at)
+
+
+def _cleanup_cookie_tmp(tmpdir: str | None) -> None:
+    """`_prepare_cookie_spec`'in oluşturduğu geçici çerez dizinini siler."""
+    if tmpdir:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def _prepare_cookie_spec(browser: str | None) -> tuple[tuple | None, str | None]:
+    """yt-dlp `cookiesfrombrowser` değerini üretir (+ silinecek geçici dizin).
+
+    FIREFOX ÖZEL DURUM: yt-dlp çerez veritabanını okurken YALNIZCA ana
+    `cookies.sqlite` dosyasını kopyalar (bkz. yt_dlp/cookies.py
+    `_open_database_copy`) — yanındaki `-wal` (write-ahead log) dosyasını hiç
+    okumaz. Firefox AÇIKKEN yeni yapılan login'in çerezleri henüz WAL'de durur;
+    yt-dlp onları göremez ("Extracted 2 cookies") ve login'li sayfa 404 döner.
+
+    Çözüm: profil dosyalarını (`cookies.sqlite` + `-wal`) geçici bir dizine
+    kopyalayıp KOPYA üzerinde `PRAGMA wal_checkpoint(TRUNCATE)` ile WAL'i ana
+    dosyaya işlemek, sonra yt-dlp'ye bu geçici profilin YOLUNU vermek. Böylece
+    Firefox açıkken de tüm çerezler görülür. Kullanıcının gerçek profiline ASLA
+    yazılmaz (salt-okunur kopya).
+
+    Diğer tarayıcılar (chrome/edge/…) şifreli çerez deposu kullanır; onlar için
+    yt-dlp'nin kendi çıkarımına bırakılır.
+
+    Dönüş: `(spec, tmpdir)`. `spec` None ise çerez kullanılmaz. `tmpdir` doluysa
+    çağıran, işi bitince `finally` içinde `_cleanup_cookie_tmp` çağırmalıdır.
+    """
+    if not browser:
+        return None, None
+    if browser != "firefox":
+        return (browser,), None
+
+    tmpdir: str | None = None
+    try:
+        source = _newest_firefox_cookie_db()
+        if source is None:
+            return (browser,), None
+        tmpdir = tempfile.mkdtemp(prefix="pluck-ffcookies-")
+        target = Path(tmpdir) / "cookies.sqlite"
+        shutil.copy2(source, target)
+        # `-shm` bilinçli olarak kopyalanmaz: paylaşımlı bellek indeksidir,
+        # bayat bir kopyası SQLite'ı yanıltabilir. SQLite onu yeniden üretir.
+        wal = Path(f"{source}-wal")
+        if wal.exists():
+            shutil.copy2(wal, f"{target}-wal")
+        connection = sqlite3.connect(str(target))
+        try:
+            connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            connection.commit()
+        finally:
+            connection.close()
+        return ("firefox", tmpdir), tmpdir
+    except Exception:
+        # Kopyalama/checkpoint başarısız — yt-dlp'nin kendi çıkarımına düş.
+        # Çerez İÇERİĞİ asla loglanmaz (yalnızca genel bir bilgi satırı).
+        logger.debug("Firefox çerez kopyası hazırlanamadı; yt-dlp'ye bırakılıyor")
+        _cleanup_cookie_tmp(tmpdir)
+        return (browser,), None
 
 # Arayüzde sunulan hazır kalite preset'leri (sıra önemli; "best" varsayılan).
 # Preset adlarının TEK doğruluk kaynağı. /api/config bunu döndürür; istemciler
@@ -249,13 +362,16 @@ def list_formats(url: str, browser: str | None = None) -> ScanResponse:
     göstermeyi mümkün kılar ama ücreti tarama süresinin artmasıdır.
     """
     options: dict = {"quiet": True, "no_warnings": True, "skip_download": True}
-    if browser:
-        options["cookiesfrombrowser"] = (browser,)
+    cookie_spec, cookie_tmp = _prepare_cookie_spec(browser)
+    if cookie_spec:
+        options["cookiesfrombrowser"] = cookie_spec
     try:
         with YoutubeDL(options) as ydl:
             info = ydl.extract_info(url, download=False)
     except YoutubeDLError as exc:
         raise EngineError(_clean_error(exc)) from exc
+    finally:
+        _cleanup_cookie_tmp(cookie_tmp)
 
     if info is None:
         raise EngineError("Video bilgisi alınamadı")
@@ -487,8 +603,19 @@ def _scan_page_for_video_urls(page_url: str, browser: str | None) -> list[str]:
     Erişim hatası alınan kaynaklar sessizce atlanır — toplama best-effort.
     """
     options: dict = {"quiet": True, "no_warnings": True, "skip_download": True}
-    if browser:
-        options["cookiesfrombrowser"] = (browser,)
+    cookie_spec, cookie_tmp = _prepare_cookie_spec(browser)
+    if cookie_spec:
+        options["cookiesfrombrowser"] = cookie_spec
+    try:
+        return _scan_page_with_options(page_url, options)
+    finally:
+        # Geçici çerez profili tüm tarama (ana sayfa + iframe geçişi) boyunca
+        # yaşamalı; ancak burada silinir.
+        _cleanup_cookie_tmp(cookie_tmp)
+
+
+def _scan_page_with_options(page_url: str, options: dict) -> list[str]:
+    """`_scan_page_for_video_urls` gövdesi — çerez seçenekleri hazırlanmış hâlde."""
     try:
         with YoutubeDL(options) as ydl:
             main_html = ydl.urlopen(page_url).read().decode(
@@ -543,8 +670,20 @@ def _extract_each(
         "quiet": True, "no_warnings": True, "skip_download": True,
         "http_headers": {"Referer": referer},
     }
-    if browser:
-        options["cookiesfrombrowser"] = (browser,)
+    cookie_spec, cookie_tmp = _prepare_cookie_spec(browser)
+    if cookie_spec:
+        options["cookiesfrombrowser"] = cookie_spec
+    try:
+        return _extract_each_with_options(video_urls, options)
+    finally:
+        _cleanup_cookie_tmp(cookie_tmp)
+
+
+def _extract_each_with_options(
+    video_urls: list[str],
+    options: dict,
+) -> tuple[list[FormatsResponse], list[str]]:
+    """`_extract_each` gövdesi — çerez seçenekleri hazırlanmış hâlde."""
     entries: list[FormatsResponse] = []
     warnings: list[str] = []
     for idx, video_url in enumerate(video_urls):
@@ -785,8 +924,9 @@ def download(
         "progress_hooks": [_wrapped_progress],
         "postprocessor_hooks": [_pp_hook],
     }
-    if browser:
-        options["cookiesfrombrowser"] = (browser,)
+    cookie_spec, cookie_tmp = _prepare_cookie_spec(browser)
+    if cookie_spec:
+        options["cookiesfrombrowser"] = cookie_spec
     # Referer önceliği:
     # 1) Çağıranın verdiği `referer` (eklenti rozeti → sayfa adresi). Embed
     #    oynatıcılar (MediaDelivery vb.) genelde gömüldükleri sayfayı referer
@@ -824,6 +964,9 @@ def download(
         # (queue_manager iptal/hata ayrımını bayrağa göre yapar).
         _cleanup_artifacts(download_path, captured_info, cleanup_prefix)
         raise
+    finally:
+        # Çerezler yalnızca indirme sırasında gerekli; geçici profili sil.
+        _cleanup_cookie_tmp(cookie_tmp)
 
     # yt-dlp exception fırlatmasa bile merge çökmüş olabilir — diskte nihai
     # dosyanın gerçekten var olduğunu doğrula. Yoksa .part'lar geride kalır.

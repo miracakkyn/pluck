@@ -203,7 +203,16 @@ hatası yerine mevcut en iyi formata düşülür (Sprint 13).
 ## 8. Cookie desteği (login'li siteler)
 
 - Arayüzde tarayıcı seçici: `SUPPORTED_BROWSERS` + "yok" (varsayılan).
-- Seçiliyse yt-dlp'ye `cookiesfrombrowser=(browser,)` geçilir.
+- Seçiliyse yt-dlp'ye `cookiesfrombrowser` geçilir (`_prepare_cookie_spec`).
+- **Firefox + WAL (Sprint 20):** yt-dlp çerez DB'sini okurken yalnızca ana
+  `cookies.sqlite`'ı kopyalar (`yt_dlp/cookies.py:_open_database_copy`), yanındaki
+  `-wal` dosyasını HİÇ okumaz. Firefox AÇIKKEN yapılan taze login'in çerezleri
+  WAL'de durduğundan yt-dlp onları göremez (gözlenen: "Extracted 2 cookies")
+  ve login'li sayfa `404` döner. Motor bu yüzden profil dosyalarını geçici bir
+  dizine kopyalar, KOPYA üzerinde `PRAGMA wal_checkpoint(TRUNCATE)` çalıştırır ve
+  yt-dlp'ye o geçici profilin yolunu verir (`("firefox", tmpdir)`). Kullanıcının
+  gerçek profiline asla yazılmaz; iş bitince geçici dizin silinir. Diğer
+  tarayıcılar (şifreli depo) yt-dlp'nin kendi çıkarımına bırakılır.
 - Cookie verisi / tarayıcı içeriği **asla loglanmaz**.
 - README notları: cookie ile indirmeden önce ilgili tarayıcı kapatılmalı;
   Windows'ta güncel Chrome'un App-Bound şifrelemesi tarayıcı kapalıyken çözülür;

@@ -1,4 +1,8 @@
 """ytdlp_engine.py — format seçici ve format listeleme testleri (yt-dlp mock'lanır)."""
+import os
+import shutil
+import sqlite3
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -21,6 +25,16 @@ def _offline_dns(monkeypatch):
     def _no_dns(host, *args, **kwargs):
         raise OSError("offline test")
     monkeypatch.setattr(ytdlp_engine, "_resolve_host", _no_dns)
+
+
+@pytest.fixture(autouse=True)
+def _no_firefox_profile(monkeypatch):
+    """Testler makinede Firefox kurulu olup olmamasına bağlı OLMASIN.
+
+    Varsayılan: profil bulunamaz → `cookiesfrombrowser=(browser,)` (yt-dlp'nin
+    kendi çıkarımı). WAL testleri bunu kendi içinde override eder.
+    """
+    monkeypatch.setattr(ytdlp_engine, "_newest_firefox_cookie_db", lambda: None)
 
 FAKE_INFO = {
     "title": "Test Video",
@@ -109,6 +123,119 @@ class TestAria2cOptions:
         ext = ytdlp_engine._aria2c_download_options()["external_downloader"]
         assert "m3u8_native" in ext
         assert "http" not in ext, "aria2c http için kullanılmamalı (YouTube 403)"
+
+
+def _count_cookies(db_path) -> int:
+    con = sqlite3.connect(str(db_path))
+    try:
+        return con.execute("SELECT count(*) FROM moz_cookies").fetchone()[0]
+    finally:
+        con.close()
+
+
+def _firefox_db_with_wal(tmp_path):
+    """2 çerezi ana dosyada, 6 çerezi WAL'de olan sahte Firefox cookies.sqlite.
+
+    Mac'te gözlenen durumu birebir modeller: yt-dlp yalnız ana dosyayı kopyaladığı
+    için 2 çerez görür ("Extracted 2 cookies" → 404); WAL de işlenirse 8 görünür.
+    Bağlantı AÇIK bırakılır — Firefox çalışırken olduğu gibi. Çağıran kapatmalı.
+    """
+    db = tmp_path / "cookies.sqlite"
+    con = sqlite3.connect(str(db))
+    con.execute("PRAGMA journal_mode=WAL")
+    con.execute("CREATE TABLE moz_cookies (id INTEGER PRIMARY KEY, host TEXT, name TEXT)")
+    con.executemany("INSERT INTO moz_cookies (host, name) VALUES (?, ?)",
+                    [("eski.example", "a"), ("eski.example", "b")])
+    con.commit()
+    con.execute("PRAGMA wal_checkpoint(TRUNCATE)")   # bu 2'si ana dosyaya işlensin
+    con.commit()
+    # Bundan sonrası WAL'de kalsın (Firefox açıkken yapılan taze login gibi).
+    con.execute("PRAGMA wal_autocheckpoint=0")
+    con.executemany("INSERT INTO moz_cookies (host, name) VALUES (?, ?)",
+                    [("uzemykoabt.com", f"oturum{i}") for i in range(6)])
+    con.commit()
+    assert Path(f"{db}-wal").exists(), "test kurulumu: -wal dosyası oluşmalıydı"
+    return db, con
+
+
+class TestFirefoxCookieWal:
+    """Firefox açıkken taze login çerezleri WAL'de kalır; yt-dlp onları okumaz."""
+
+    def test_copying_only_main_db_loses_wal_cookies(self, tmp_path):
+        # yt-dlp'nin davranışı (cookies.py _open_database_copy): sadece ana dosya.
+        db, con = _firefox_db_with_wal(tmp_path)
+        try:
+            only_main = tmp_path / "yalniz_ana.sqlite"
+            shutil.copy2(db, only_main)
+            assert _count_cookies(only_main) == 2   # taze 6 çerez KAYIP → 404
+        finally:
+            con.close()
+
+    def test_prepare_cookie_spec_checkpoints_wal(self, tmp_path, monkeypatch):
+        # Bizim düzeltmemiz: WAL'i kopya üzerinde işle → tüm çerezler görünür.
+        db, con = _firefox_db_with_wal(tmp_path)
+        tmpdir = None
+        try:
+            monkeypatch.setattr(ytdlp_engine, "_newest_firefox_cookie_db", lambda: db)
+            spec, tmpdir = ytdlp_engine._prepare_cookie_spec("firefox")
+            assert spec[0] == "firefox"
+            assert spec[1] == tmpdir          # yt-dlp'ye geçici profil YOLU verilir
+            copied = Path(tmpdir) / "cookies.sqlite"
+            assert _count_cookies(copied) == 8   # 2 eski + 6 WAL'deki
+        finally:
+            ytdlp_engine._cleanup_cookie_tmp(tmpdir)
+            con.close()
+
+    def test_real_profile_is_never_modified(self, tmp_path, monkeypatch):
+        # Gerçek profile yazılmamalı: WAL hâlâ orada, ana dosya hâlâ 2 çerezli.
+        db, con = _firefox_db_with_wal(tmp_path)
+        tmpdir = None
+        try:
+            monkeypatch.setattr(ytdlp_engine, "_newest_firefox_cookie_db", lambda: db)
+            _, tmpdir = ytdlp_engine._prepare_cookie_spec("firefox")
+            assert Path(f"{db}-wal").exists()
+            only_main = tmp_path / "kontrol.sqlite"
+            shutil.copy2(db, only_main)
+            assert _count_cookies(only_main) == 2
+        finally:
+            ytdlp_engine._cleanup_cookie_tmp(tmpdir)
+            con.close()
+
+    def test_cleanup_removes_temp_profile(self, tmp_path, monkeypatch):
+        db, con = _firefox_db_with_wal(tmp_path)
+        try:
+            monkeypatch.setattr(ytdlp_engine, "_newest_firefox_cookie_db", lambda: db)
+            _, tmpdir = ytdlp_engine._prepare_cookie_spec("firefox")
+            assert os.path.isdir(tmpdir)
+            ytdlp_engine._cleanup_cookie_tmp(tmpdir)
+            assert not os.path.isdir(tmpdir)
+        finally:
+            con.close()
+
+    def test_download_passes_temp_profile_path_to_ytdlp(self, tmp_path, monkeypatch):
+        db, con = _firefox_db_with_wal(tmp_path)
+        try:
+            monkeypatch.setattr(ytdlp_engine, "_newest_firefox_cookie_db", lambda: db)
+            ydl_class = _mock_ydl()
+            with patch.object(ytdlp_engine, "YoutubeDL", ydl_class):
+                ytdlp_engine.download(url="https://x/v", selection="best",
+                                      download_dir=str(tmp_path), browser="firefox")
+            spec = ydl_class.call_args[0][0]["cookiesfrombrowser"]
+            assert spec[0] == "firefox"
+            assert len(spec) == 2 and os.sep in spec[1]  # profil yolu geçildi
+        finally:
+            con.close()
+
+    def test_non_firefox_browser_left_to_ytdlp(self):
+        # chrome/edge şifreli depo kullanır → yt-dlp'nin kendi çıkarımı.
+        assert ytdlp_engine._prepare_cookie_spec("chrome") == (("chrome",), None)
+
+    def test_no_browser_means_no_cookies(self):
+        assert ytdlp_engine._prepare_cookie_spec(None) == (None, None)
+
+    def test_falls_back_when_no_firefox_profile(self):
+        # autouse fixture profil bulunmuyor yapar → eski davranışa düş.
+        assert ytdlp_engine._prepare_cookie_spec("firefox") == (("firefox",), None)
 
 
 class TestBuildFormatSelector:
